@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Administration · Biso.nabiso-Ticket</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main id="main">
+  <div class="wrap page">
+    <h1 style="font-size:1.9rem">Administration</h1>
+    <div class="tabs" role="tablist" id="tabs"></div>
+    <div id="view"><div class="empty">Chargement…</div></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="../scripts/config.js"></script>
+<script src="../scripts/app.js"></script>
+<script src="../scripts/Bot.js"></script>
+<script src="../scripts/Eventsmanager.js"></script>
+<script>
+(async () => {
+  const { ok, me } = await App.start({ active: "admin", roles: ["proprietaire"] });
+  if (!ok) return;
+  const { esc, money, $ } = App;
+  const sb = App.sb;
+  const view = $("#view");
+
+  const TABS = [["overview", "Vue d'ensemble"], ["events", "Événements"], ["partners", "Partenaires"],
+    ["payments", "Paiements"], ["incidents", "Incidents"], ["payouts", "Reversements"],
+    ["journal", "Journal"], ["settings", "Réglages"]];
+  $("#tabs").innerHTML = TABS.map(([k, l]) => `<button type="button" role="tab" data-tab="${k}" aria-selected="false">${l}</button>`).join("");
+  $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (b) location.hash = b.dataset.tab; };
+
+  /* ---------- Vue d'ensemble ---------- */
+  async function overview() {
+    const o = await App.rpc("owner_overview");
+    const rev = o.revenue.length ? o.revenue.map((r) => money(r.total, r.currency)).join(" · ") : "0";
+    const todo = [];
+    if (o.events_pending) todo.push(`<a href="#events">${o.events_pending} événement(s) à valider</a>`);
+    if (o.partner_requests) todo.push(`<a href="#partners">${o.partner_requests} demande(s) de partenariat</a>`);
+    if (o.payments_to_check) todo.push(`<a href="#payments">${o.payments_to_check} paiement(s) par code à vérifier</a>`);
+    if (o.incidents_open) todo.push(`<a href="#incidents">${o.incidents_open} cas signalé(s) à l'entrée</a>`);
+    o.low_stock.forEach((l) => todo.push(`Billets presque épuisés : <b>${esc(l.lot)}</b> de « ${esc(l.event)} » (il en reste ${l.left}). <a href="#events">Ajouter un lot</a>`));
+    o.expiring_orgs.forEach((g) => todo.push(`L'accès de <b>${esc(g.name)}</b> se termine le ${esc(App.fmtShort(g.access_end))}. <a href="#partners">Prolonger</a>`));
+    view.innerHTML = `<div class="kpis">
+        <div class="kpi"><b>${o.events_total}</b><span>événements</span></div>
+        <div class="kpi"><b>${o.tickets_sold}</b><span>billets émis</span></div>
+        <div class="kpi"><b>${o.entered}</b><span>entrées scannées</span></div>
+        <div class="kpi"><b style="font-size:1.25rem">${esc(rev)}</b><span>ventes brutes</span></div></div>
+      <div class="panel"><h3>À traiter</h3>
+        ${todo.length ? todo.map((t) => `<div class="lot">${t}</div>`).join("") : '<p class="muted" style="margin:0">Rien à traiter pour le moment.</p>'}</div>`;
+    if (todo.length && window.Bot) Bot.announce("Vous avez " + todo.length + " point(s) à traiter dans l'administration.", "");
+  }
+
+  /* ---------- Événements ---------- */
+  async function events() {
+    view.innerHTML = '<div id="em"></div>';
+    await EventsManager.mount($("#em"), { me, owner: true, orgs: [], operations: false, staff: true });
+  }
+
+  /* ---------- Partenaires ---------- */
+  async function partners() {
+    const [reqs, orgs] = await Promise.all([
+      App.q(sb.from("partner_requests").select("*, profiles(full_name,email,phone)").eq("status", "en_attente").order("created_at")),
+      App.q(sb.from("organisations").select("*").order("created_at", { ascending: false })),
+    ]);
+    const state = (o) => o.status !== "actif" ? '<span class="chip bad">Suspendu</span>' :
+      (o.access_end && new Date(o.access_end) < Date.now()) ? '<span class="chip bad">Accès expiré</span>' : '<span class="chip ok">Actif</span>';
+    view.innerHTML = `
+      <div class="panel"><h3>Demandes de partenariat (${reqs.length})</h3>
+        ${reqs.length ? reqs.map((r) => `<div class="panel" data-req="${esc(r.id)}">
+          <b>${esc(r.company_name)}</b>
+          <p class="muted small">${esc(r.profiles ? r.profiles.full_name : "")} · ${esc(r.profiles ? r.profiles.email : "")} · ${esc(r.profiles ? r.profiles.phone || "" : "")}</p>
+          ${r.message ? `<p style="white-space:pre-line">${esc(r.message)}</p>` : ""}
+          <div class="row">
+            <label class="field"><span>Durée d'accès (jours)</span><input type="number" min="1" value="20" data-days></label>
+            <label class="field"><span>Commission (%)</span><input type="number" min="0" max="100" step="0.5" value="10" data-comm></label></div>
+          <div class="inline"><button class="btn btn-ok btn-sm" data-act="approve">Approuver</button>
+            <button class="btn btn-danger btn-sm" data-act="reject">Refuser</button></div></div>`).join("") :
+          '<p class="muted" style="margin:0">Aucune demande en attente.</p>'}</div>
+
+      <details class="panel"><summary>＋ Ajouter une organisation à la main</summary>
+        <form id="newOrg">
+          <div class="row"><label class="field"><span>Nom</span><input name="name" required></label>
+            <label class="field"><span>Email de contact</span><input name="email" type="email"></label></div>
+          <div class="row"><label class="field"><span>Durée d'accès (jours)</span><input name="days" type="number" min="1" value="20"></label>
+            <label class="field"><span>Commission (%)</span><input name="comm" type="number" min="0" max="100" step="0.5" value="10"></label></div>
+          <button class="btn" type="submit">Créer l'organisation</button>
+          <p class="muted small">Ensuite, cliquez sur « Lien d'invitation » et envoyez-le à l'entreprise.</p>
+        </form></details>
+
+      <div class="panel"><h3>Organisations</h3>
+        ${orgs.length ? `<div class="table-wrap"><table><thead><tr><th>Organisation</th><th>Statut</th><th>Accès jusqu'au</th><th>Commission</th><th>Actions</th></tr></thead><tbody>
+          ${orgs.map((o) => `<tr><td><b>${esc(o.name)}</b><br><span class="muted small">${esc(o.contact_email || "")}</span></td>
+            <td>${state(o)}</td><td>${o.access_end ? esc(App.fmtShort(o.access_end)) : "illimité"}</td><td>${o.commission_percent}%</td>
+            <td><div class="inline">
+              <button class="btn btn-ghost btn-sm" data-act="ext" data-days="7" data-id="${esc(o.id)}">+7 j</button>
+              <button class="btn btn-ghost btn-sm" data-act="ext" data-days="20" data-id="${esc(o.id)}">+20 j</button>
+              <button class="btn btn-ghost btn-sm" data-act="date" data-id="${esc(o.id)}">Date…</button>
+              <button class="btn btn-ghost btn-sm" data-act="unlimited" data-id="${esc(o.id)}">Illimité</button>
+              <button class="btn btn-ghost btn-sm" data-act="comm" data-id="${esc(o.id)}">Commission</button>
+              <button class="btn btn-ghost btn-sm" data-act="toggle" data-id="${esc(o.id)}">${o.status === "actif" ? "Suspendre" : "Réactiver"}</button>
+              <button class="btn btn-sm" data-act="invite" data-id="${esc(o.id)}">Lien d'invitation</button>
+            </div></td></tr>`).join("")}</tbody></table></div>` : '<p class="muted" style="margin:0">Aucune organisation.</p>'}</div>`;
+
+    $("#newOrg").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      await App.run(e.target.querySelector('[type="submit"]'), async () => {
+        const end = new Date(Date.now() + parseInt(f.get("days"), 10) * 864e5).toISOString();
+        await App.q(sb.from("organisations").insert({ name: f.get("name").trim(), contact_email: f.get("email") || null,
+          commission_percent: parseFloat(f.get("comm")), access_end: end }));
+        App.toast("Organisation créée.", "ok"); await partners();
+      });
+    };
+    view.onclick = async (e) => {
+      const b = e.target.closest("[data-act]");
+      if (!b) return;
+      const act = b.dataset.act;
+      await App.run(b, async () => {
+        if (act === "approve" || act === "reject") {
+          const card = b.closest("[data-req]"), id = card.dataset.req;
+          if (act === "approve") {
+            await App.rpc("approve_partner_request", { p_request_id: id,
+              p_days: parseInt(card.querySelector("[data-days]").value, 10),
+              p_commission: parseFloat(card.querySelector("[data-comm]").value) });
+            App.toast("Partenaire approuvé.", "ok");
+          } else {
+            await App.q(sb.from("partner_requests").update({ status: "refusee" }).eq("id", id));
+          }
+          return partners();
+        }
+        const id = b.dataset.id, o = orgs.find((x) => x.id === id);
+        let patch = null;
+        if (act === "ext") {
+          const base = Math.max(Date.now(), o.access_end ? new Date(o.access_end).getTime() : 0);
+          patch = { access_end: new Date(base + parseInt(b.dataset.days, 10) * 864e5).toISOString() };
+        } else if (act === "date") {
+          const v = prompt("Nouvelle date de fin d'accès (AAAA-MM-JJ) :", o.access_end ? o.access_end.slice(0, 10) : "");
+          if (!v) return;
+          const d = new Date(v + "T23:59:00");
+          if (isNaN(d)) throw new Error("Date invalide. Exemple : 2026-11-30");
+          patch = { access_end: d.toISOString() };
+        } else if (act === "unlimited") {
+          patch = { access_end: null };
+        } else if (act === "comm") {
+          const v = prompt("Commission en % :", o.commission_percent);
+          if (v === null) return;
+          patch = { commission_percent: parseFloat(v) };
+        } else if (act === "toggle") {
+          patch = { status: o.status === "actif" ? "suspendu" : "actif" };
+        } else if (act === "invite") {
+          const token = await App.rpc("create_invitation", { p_org_id: id, p_days: 7, p_email: null });
+          const url = new URL("connexion.html?invite=" + token, location.href).href;
+          try { await navigator.clipboard.writeText(url); } catch (_) { /* ignore */ }
+          prompt("Lien d'invitation (valable 7 jours, à usage unique). Copiez-le et envoyez-le à l'entreprise :", url);
+          return;
+        }
+        if (patch) { await App.q(sb.from("organisations").update(patch).eq("id", id)); App.toast("Organisation mise à jour.", "ok"); await partners(); }
+      });
+    };
+  }
+
+  /* ---------- Paiements ---------- */
+  async function payments() {
+    const [pend, tx, recent] = await Promise.all([
+      App.q(sb.from("payments").select("id,amount,currency,network,transfer_code,phone,created_at,orders(events(title),profiles(full_name,phone))")
+        .eq("status", "a_verifier").order("created_at")),
+      App.q(sb.from("incoming_transactions").select("*").order("received_at", { ascending: false }).limit(15)),
+      App.q(sb.from("payments").select("id,amount,currency,method,status,created_at").order("created_at", { ascending: false }).limit(15)),
+    ]);
+    const PS = { en_attente: "warn", a_verifier: "warn", reussi: "ok", echoue: "bad", expire: "" };
+    view.innerHTML = `
+      <div class="panel"><h3>Paiements par code à vérifier (${pend.length})</h3>
+        <p class="muted small">Comparez avec le SMS reçu sur votre numéro. Si vous enregistrez la transaction reçue (formulaire plus bas), le paiement du client est confirmé automatiquement.</p>
+        ${pend.length ? pend.map((p) => `<div class="lot"><div>
+          <b>${esc(p.transfer_code)}</b> · ${esc(p.network || "")} · ${money(p.amount, p.currency)}<br>
+          <span class="muted small">${esc(p.orders && p.orders.profiles ? p.orders.profiles.full_name : "")} · ${esc(p.orders && p.orders.events ? p.orders.events.title : "")} · ${esc(App.fmtShort(p.created_at))}</span></div>
+          <div class="inline"><button class="btn btn-ok btn-sm" data-act="ok" data-id="${esc(p.id)}">Confirmer</button>
+          <button class="btn btn-danger btn-sm" data-act="no" data-id="${esc(p.id)}">Refuser</button></div></div>`).join("") :
+          '<p class="muted" style="margin:0">Aucun paiement à vérifier.</p>'}</div>
+
+      <form class="panel" id="txForm"><h3>Enregistrer une transaction reçue</h3>
+        <div class="row">
+          <label class="field"><span>Réseau</span><select name="network"><option value="mpesa">M-Pesa</option><option value="airtel">Airtel Money</option><option value="orange">Orange Money</option></select></label>
+          <label class="field"><span>Code de transfert</span><input name="code" required></label>
+          <label class="field"><span>Montant</span><input name="amount" type="number" step="0.01" min="0.01" required></label>
+          <label class="field"><span>Devise</span><select name="currency"><option>USD</option><option>CDF</option></select></label></div>
+        <button class="btn" type="submit">Enregistrer</button></form>
+
+      <div class="panel"><h3>Transactions reçues (15 dernières)</h3>
+        ${tx.length ? `<div class="table-wrap"><table><thead><tr><th>Code</th><th>Réseau</th><th>Montant</th><th>Reçue</th><th>Utilisée</th></tr></thead><tbody>
+          ${tx.map((t) => `<tr><td>${esc(t.transfer_code)}</td><td>${esc(t.network)}</td><td>${money(t.amount, t.currency)}</td><td>${esc(App.fmtShort(t.received_at))}</td><td>${t.used ? "oui" : "non"}</td></tr>`).join("")}</tbody></table></div>` : '<p class="muted" style="margin:0">Aucune.</p>'}</div>
+
+      <div class="panel"><h3>Derniers paiements</h3>
+        ${recent.length ? `<div class="table-wrap"><table><thead><tr><th>Date</th><th>Moyen</th><th>Montant</th><th>Statut</th></tr></thead><tbody>
+          ${recent.map((p) => `<tr><td>${esc(App.fmtShort(p.created_at))}</td><td>${esc(p.method)}</td><td>${money(p.amount, p.currency)}</td><td><span class="chip ${PS[p.status] || ""}">${esc(p.status)}</span></td></tr>`).join("")}</tbody></table></div>` : '<p class="muted" style="margin:0">Aucun paiement.</p>'}</div>`;
+
+    $("#txForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      await App.run(e.target.querySelector('[type="submit"]'), async () => {
+        await App.q(sb.from("incoming_transactions").insert({ network: f.get("network"),
+          transfer_code: f.get("code").trim(), amount: parseFloat(f.get("amount")), currency: f.get("currency") }));
+        App.toast("Transaction enregistrée.", "ok"); await payments();
+      });
+    };
+    view.onclick = async (e) => {
+      const b = e.target.closest("[data-act]");
+      if (!b) return;
+      await App.run(b, async () => {
+        if (b.dataset.act === "ok") { await App.rpc("approve_code_payment", { p_payment_id: b.dataset.id }); App.toast("Paiement confirmé, billets envoyés.", "ok"); }
+        else { await App.rpc("reject_code_payment", { p_payment_id: b.dataset.id }); App.toast("Paiement refusé."); }
+        await payments();
+      });
+    };
+  }
+
+  /* ---------- Incidents ---------- */
+  async function incidents() {
+    view.innerHTML = `<p class="muted">Une personne se présente avec le billet d'un autre. Contactez le détenteur pour confirmer, puis décidez.</p><div id="inc"></div>`;
+    await EventsManager.mountIncidents($("#inc"));
+  }
+
+  /* ---------- Reversements ---------- */
+  async function payouts() {
+    const rows = await App.rpc("owner_payout_summary");
+    view.innerHTML = rows.length ? `<div class="panel"><div class="table-wrap"><table><thead><tr><th>Événement</th><th>Organisation</th><th>Brut</th><th>Net après commission</th><th>Déjà versé</th><th>Reste à verser</th><th></th></tr></thead><tbody>
+      ${rows.map((r) => { const due = Math.round((r.net - r.paid) * 100) / 100; return `<tr>
+        <td><b>${esc(r.title)}</b></td><td>${esc(r.org_name)} (${r.commission_percent}%)</td>
+        <td>${money(r.gross, r.currency)}</td><td>${money(r.net, r.currency)}</td><td>${money(r.paid, r.currency)}</td>
+        <td><b>${money(due, r.currency)}</b></td>
+        <td>${due > 0 ? `<button class="btn btn-sm" data-pay="${esc(r.event_id)}" data-org="${esc(r.org_id)}" data-cur="${esc(r.currency)}" data-due="${due}">Enregistrer un reversement</button>` : ""}</td></tr>`; }).join("")}
+      </tbody></table></div></div>` : '<div class="empty">Aucun événement d\'organisation partenaire pour le moment.</div>';
+    view.onclick = async (e) => {
+      const b = e.target.closest("[data-pay]");
+      if (!b) return;
+      const v = prompt("Montant reversé (" + b.dataset.cur + ") :", b.dataset.due);
+      if (!v) return;
+      const amount = parseFloat(v);
+      if (!(amount > 0)) { App.error(new Error("Montant invalide.")); return; }
+      await App.run(b, async () => {
+        await App.q(sb.from("payouts").insert({ event_id: b.dataset.pay, org_id: b.dataset.org, amount, currency: b.dataset.cur }));
+        App.toast("Reversement enregistré.", "ok"); await payouts();
+      });
+    };
+  }
+
+  /* ---------- Journal ---------- */
+  async function journal() {
+    const rows = await App.q(sb.from("audit_log").select("*").order("created_at", { ascending: false }).limit(100));
+    const ids = [...new Set(rows.map((r) => r.user_id).filter(Boolean))];
+    const profs = ids.length ? await App.q(sb.from("profiles").select("id,full_name").in("id", ids)) : [];
+    const name = Object.fromEntries(profs.map((p) => [p.id, p.full_name]));
+    view.innerHTML = rows.length ? `<div class="panel"><div class="table-wrap"><table><thead><tr><th>Date</th><th>Qui</th><th>Action</th><th>Détails</th></tr></thead><tbody>
+      ${rows.map((r) => `<tr><td>${esc(App.fmtShort(r.created_at))}</td><td>${esc(name[r.user_id] || "système")}</td><td><b>${esc(r.action)}</b></td>
+        <td class="small muted">${esc(r.details ? JSON.stringify(r.details) : "")}</td></tr>`).join("")}</tbody></table></div></div>` :
+      '<div class="empty">Le journal est vide.</div>';
+  }
+
+  /* ---------- Réglages ---------- */
+  async function settings() {
+    const st = Object.fromEntries((await App.q(sb.from("settings").select("key,value"))).map((r) => [r.key, r.value]));
+    view.innerHTML = `<form class="panel" id="sf"><h3>Paiements</h3>
+        <label class="inline" style="margin-bottom:14px"><input type="checkbox" name="test" style="width:auto" ${st.public_test_mode === "true" ? "checked" : ""}>
+          <span><b>Mode test</b> : permet de simuler un paiement sans argent. À désactiver avant le lancement réel.</span></label>
+        <p class="muted small">Numéros qui reçoivent l'argent (affichés aux clients qui paient par transfert) :</p>
+        <div class="row">
+          <label class="field"><span>M-Pesa</span><input name="mpesa" value="${esc(st.public_receiver_mpesa || "")}"></label>
+          <label class="field"><span>Airtel Money</span><input name="airtel" value="${esc(st.public_receiver_airtel || "")}"></label>
+          <label class="field"><span>Orange Money</span><input name="orange" value="${esc(st.public_receiver_orange || "")}"></label></div>
+        <button class="btn" type="submit">Enregistrer</button></form>
+      <div class="panel"><h3>Votre compte</h3>
+        <p style="margin:0">Vous êtes le <b>propriétaire</b> du site (${esc(me.email || "")}). Ce rôle est unique, permanent et ne peut être retiré par personne.</p></div>`;
+    $("#sf").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      const test = f.get("test") === "on";
+      if (!test && st.public_test_mode === "true" &&
+          !confirm("Sans le mode test, seuls les vrais paiements fonctionnent. Tant que l'agrégateur n'est pas branché, seul le paiement par code de transfert marchera. Continuer ?")) return;
+      await App.run(e.target.querySelector('[type="submit"]'), async () => {
+        await App.q(sb.from("settings").upsert([
+          { key: "public_test_mode", value: test ? "true" : "false" },
+          { key: "public_receiver_mpesa", value: f.get("mpesa").trim() },
+          { key: "public_receiver_airtel", value: f.get("airtel").trim() },
+          { key: "public_receiver_orange", value: f.get("orange").trim() }]));
+        App.toast("Réglages enregistrés.", "ok");
+      });
+    };
+  }
+
+  /* ---------- Navigation par onglets ---------- */
+  const VIEWS = { overview, events, partners, payments, incidents, payouts, journal, settings };
+  async function show() {
+    let k = location.hash.replace("#", "");
+    if (!VIEWS[k]) k = "events";
+    App.$$("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === k));
+    view.onclick = null; view.onsubmit = null;
+    view.innerHTML = '<div class="empty">Chargement…</div>';
+    try { await VIEWS[k](); } catch (e) { App.error(e); view.innerHTML = '<div class="empty">Impossible de charger cette section.</div>'; }
+  }
+  window.addEventListener("hashchange", show);
+  show();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mes billets · Biso.nabiso-Ticket</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main id="main">
+  <div class="wrap page">
+    <h1 style="font-size:2rem">Mes billets</h1>
+    <div id="pending"></div>
+    <div id="list"><div class="empty">Chargement…</div></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="../scripts/config.js"></script>
+<script src="../scripts/app.js"></script>
+<script src="../scripts/Bot.js"></script>
+<script>
+(async () => {
+  const { ok, me } = await App.start({ active: "tickets", roles: ["client", "personnel", "organisateur", "proprietaire"] });
+  if (!ok) return;
+  const { esc } = App;
+  const sb = App.sb;
+  const list = App.$("#list");
+  const STATUS = {
+    en_attente_paiement: ["Paiement en attente", "warn"],
+    valide: ["Valide", "ok"], en_attente_confirmation: ["En attente de confirmation", "warn"],
+    utilise: ["Utilisé", ""], annule: ["Annulé", "bad"], bloque: ["Bloqué", "bad"],
+  };
+  let announced = false;
+
+  async function loadPending() {
+    try {
+      const orders = await App.q(sb.from("orders").select("id,total,currency,expires_at,events(title)")
+        .eq("user_id", me.id).eq("status", "en_attente").gt("expires_at", new Date().toISOString()));
+      App.$("#pending").innerHTML = orders.map((o) =>
+        `<div class="alert warn">Commande en attente de paiement pour <b>${esc(o.events ? o.events.title : "un événement")}</b>
+        (${App.money(o.total, o.currency)}). <a href="paiement.html?order=${esc(o.id)}">Finaliser le paiement</a></div>`).join("");
+    } catch (e) { console.error(e); }
+  }
+
+  function ticketCard(t) {
+    const [label, cls] = STATUS[t.status] || [t.status, ""];
+    const ev = t.events;
+    const lot = t.ticket_lots;
+    const cat = lot && lot.ticket_categories ? lot.ticket_categories.name : "";
+    const evCancelled = ev && ev.status === "annule";
+    const usable = t.status === "valide" && !evCancelled;
+    const canTransfer = usable && ev && new Date(ev.starts_at) > new Date();
+    return `<article class="stub ticket ${usable || t.status === "en_attente_confirmation" ? "" : "off"}">
+      <div class="stub-body">
+        <div class="inline" style="justify-content:space-between">
+          <span class="chip gold">${esc(cat)}${lot ? " · " + esc(lot.name) : ""}</span>
+          <span class="chip ${cls}">${esc(label)}</span>
+        </div>
+        <h3 style="margin-top:14px">${esc(ev ? ev.title : "Événement")}</h3>
+        <p class="muted small">${ev ? esc(App.fmtDate(ev.starts_at)) : ""}<br>${ev ? esc([ev.venue, ev.city].filter(Boolean).join(", ")) : ""}</p>
+        ${evCancelled ? '<p class="alert bad small">Cet événement a été annulé.</p>' : ""}
+        <p style="margin:0"><span class="muted small">Détenteur du billet</span><br>
+          <b style="font-family:var(--font-display);font-size:1.35rem">${esc(t.holder_name)}</b></p>
+        ${t.photo_path ? `<img class="ticket-photo" data-photo-path="${esc(t.photo_path)}" alt="Photo du détenteur ${esc(t.holder_name)}" hidden>` : ""}
+        ${t.is_free ? '<p class="small" style="margin:6px 0 0"><span class="chip">Invitation</span></p>' : ""}
+      </div>
+      <div class="stub-foot">
+        <div class="qr" data-code="${esc(t.code)}" role="img" aria-label="QR code du billet de ${esc(t.holder_name)}"></div>
+        ${canTransfer ? `<button class="btn btn-ghost btn-sm" data-transfer="${esc(t.id)}" data-name="${esc(t.holder_name)}">Transférer ce billet</button>` :
+          `<span class="muted small">${t.status === "utilise" ? "Déjà utilisé à l'entrée" : ""}</span>`}
+      </div></article>`;
+  }
+
+  async function render() {
+    let tickets = [];
+    try {
+      tickets = await App.q(sb.from("tickets")
+        .select("id,code,holder_name,status,is_free,photo_path,events(title,starts_at,venue,city,status),ticket_lots(name,ticket_categories(name))")
+        .eq("owner_id", me.id).order("created_at", { ascending: false }));
+    } catch (e) {
+      App.error(e);
+      list.innerHTML = '<div class="empty">Impossible de charger vos billets.</div>';
+      return;
+    }
+    if (!tickets.length) {
+      list.innerHTML = '<div class="empty">Vous n\'avez pas encore de billet.<br><br><a class="btn" href="index.html">Voir les événements</a></div>';
+      return;
+    }
+    const active = tickets.filter((t) => ["valide", "en_attente_confirmation"].includes(t.status));
+    const other = tickets.filter((t) => !active.includes(t));
+    list.innerHTML = (active.length ? `<h2>À présenter à l'entrée</h2>
+        <p class="muted">Gardez votre pièce d'identité : le personnel compare votre nom avec celui du billet.</p>
+        <div class="grid">${active.map(ticketCard).join("")}</div>` : "") +
+      (other.length ? `<h2 style="margin-top:30px">Billets passés ou inactifs</h2><div class="grid">${other.map(ticketCard).join("")}</div>` : "");
+
+    App.$$(".qr[data-code]", list).forEach((el) => {
+      new QRCode(el, { text: el.dataset.code, width: 156, height: 156, correctLevel: QRCode.CorrectLevel.M });
+    });
+    for (const image of App.$$("[data-photo-path]", list)) {
+      const { data, error } = await sb.storage.from("ticket-photos").createSignedUrl(image.dataset.photoPath, 300);
+      if (error) { App.error(error); continue; }
+      image.src = data.signedUrl;
+      image.hidden = false;
+    }
+
+    if (!announced) {
+      announced = true;
+      tickets.filter((t) => t.status === "en_attente_confirmation").forEach((t) => {
+        if (window.Bot) Bot.announce("Le billet de " + t.holder_name + " est en attente de confirmation : l'organisateur va vous contacter pour vérifier que vous avez bien envoyé cette personne.", "error");
+      });
+    }
+  }
+
+  list.addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-transfer]");
+    if (!b) return;
+    const name = prompt("Nom complet de la personne qui reçoit le billet :");
+    if (!name || !name.trim()) return;
+    const phone = prompt("Son numéro de téléphone (facultatif) :") || null;
+    if (!confirm("Transférer ce billet à « " + name.trim() + " » ? L'ancien QR code ne fonctionnera plus.")) return;
+    await App.run(b, async () => {
+      await App.rpc("transfer_ticket", { p_ticket_id: b.dataset.transfer, p_new_name: name.trim(), p_new_phone: phone });
+      App.toast("Billet transféré à " + name.trim() + ". Un nouveau QR code a été créé.", "ok");
+      await render();
+    });
+  });
+
+  await loadPending();
+  await render();
+})();
+</script>
+</body>
+</html>

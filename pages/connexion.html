@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Connexion · Biso.nabiso-Ticket</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main id="main">
+  <div class="wrap page" style="max-width:520px">
+    <h1 style="font-size:2rem">Votre compte</h1>
+    <div id="invite-note" class="alert ok hidden">Vous avez reçu une invitation de partenaire. Connectez-vous ou créez un compte pour l'accepter.</div>
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" id="t-login" aria-selected="true">Se connecter</button>
+      <button type="button" role="tab" id="t-signup" aria-selected="false">Créer un compte</button>
+    </div>
+
+    <form id="f-login" class="panel">
+      <label class="field"><span>Email</span><input type="email" name="email" required autocomplete="email"></label>
+      <label class="field"><span>Mot de passe</span><input type="password" name="password" required autocomplete="current-password"></label>
+      <button class="btn btn-block" type="submit">Se connecter</button>
+    </form>
+
+    <form id="f-signup" class="panel hidden">
+      <label class="field"><span>Nom complet</span><input name="full_name" required maxlength="80" autocomplete="name"></label>
+      <label class="field"><span>Téléphone</span><input type="tel" name="phone" required maxlength="20" autocomplete="tel" placeholder="+243…"></label>
+      <label class="field"><span>Email</span><input type="email" name="email" required autocomplete="email"></label>
+      <label class="field"><span>Mot de passe (8 caractères minimum)</span><input type="password" name="password" required minlength="8" autocomplete="new-password"></label>
+      <button class="btn btn-block" type="submit">Créer mon compte</button>
+      <p class="muted small" style="margin:12px 0 0">Votre nom sera utilisé sur vos billets.</p>
+    </form>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="../scripts/config.js"></script>
+<script src="../scripts/app.js"></script>
+<script src="../scripts/Bot.js"></script>
+<script>
+(async () => {
+  const { ok, me } = await App.start({ active: "login" });
+  if (!ok) return;
+  const sb = App.sb;
+  const invite = App.qs("invite");
+  let next = App.qs("next") || "";
+  // On n'accepte qu'une page du site (jamais un lien externe).
+  if (!/^(?:index|admin|organisateur|scan|mes-billets|partenaire|evenement|paiement)\.html(?:\?[\w=&%\-.]*)?$/i.test(next)) next = "";
+
+  function tab(which) {
+    const login = which === "login";
+    App.$("#f-login").classList.toggle("hidden", !login);
+    App.$("#f-signup").classList.toggle("hidden", login);
+    App.$("#t-login").setAttribute("aria-selected", login);
+    App.$("#t-signup").setAttribute("aria-selected", !login);
+  }
+  App.$("#t-login").onclick = () => tab("login");
+  App.$("#t-signup").onclick = () => tab("signup");
+  if (invite) { App.$("#invite-note").classList.remove("hidden"); tab("signup"); }
+
+  // Après connexion : accepter l'invitation si besoin, puis rediriger selon le rôle.
+  async function finish() {
+    if (invite) {
+      await App.rpc("accept_invitation", { p_token: invite });
+      App.toast("Invitation acceptée : bienvenue dans l'espace organisateur.", "ok");
+    }
+    const profile = await App.me(true);
+    if (!profile) throw new Error("Votre compte n'a pas de profil associé. Contactez Biso.nabiso-Ticket.");
+    if (profile.role === "proprietaire" && !next) {
+      App.toast("Vous êtes le propriétaire du site.", "ok");
+    }
+    const dest = invite ? "organisateur.html" : (next || App.homeFor(profile ? profile.role : "client"));
+    setTimeout(() => App.go(dest), 600);
+  }
+
+  if (me) {
+    // Déjà connecté
+    if (invite) { await App.run(null, finish); return; }
+    App.go(next || App.homeFor(me.role));
+    return;
+  }
+
+  App.$("#f-login").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    await App.run(e.target.querySelector('[type="submit"]'), async () => {
+      const { error } = await sb.auth.signInWithPassword({ email: f.get("email").trim(), password: f.get("password") });
+      if (error) throw error;
+      await finish();
+    });
+  };
+
+  App.$("#f-signup").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    await App.run(e.target.querySelector('[type="submit"]'), async () => {
+      const { data, error } = await sb.auth.signUp({
+        email: f.get("email").trim(), password: f.get("password"),
+        options: {
+          data: { full_name: f.get("full_name").trim(), phone: f.get("phone").trim() },
+          emailRedirectTo: location.href
+        },
+      });
+      if (error) throw error;
+      if (!data.session) {
+        // La confirmation par email est activée dans Supabase.
+        App.$("#f-signup").innerHTML = "<h2>Vérifiez votre email</h2><p>Nous vous avons envoyé un lien de confirmation. Cliquez dessus, puis revenez vous connecter" +
+          (invite ? " avec le même lien d'invitation" : "") + ".</p>";
+        return;
+      }
+      await finish();
+    });
+  };
+})();
+</script>
+</body>
+</html>

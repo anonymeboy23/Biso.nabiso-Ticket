@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paiement · Biso.nabiso-Ticket</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main id="main">
+  <div class="wrap page" style="max-width:620px" id="pay"><div class="empty">Chargement…</div></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="../scripts/config.js"></script>
+<script src="../scripts/app.js"></script>
+<script src="../scripts/Bot.js"></script>
+<script>
+(async () => {
+  const { ok } = await App.start({ active: "", roles: ["client", "personnel", "organisateur", "proprietaire"] });
+  if (!ok) return;
+  const { esc, money } = App;
+  const sb = App.sb;
+  const root = App.$("#pay");
+  const orderId = App.qs("order");
+
+  let order = null, payments = [];
+  try {
+    order = await App.q(sb.from("orders")
+      .select("*, events(title,starts_at,venue,city), order_lines(holder_name,unit_price,ticket_lots(name))")
+      .eq("id", orderId).maybeSingle());
+    if (order && order.status !== "paye") payments = await App.q(sb.from("payments").select("id,status,method").eq("order_id", orderId));
+  } catch (e) { App.error(e); }
+  if (!order) { root.innerHTML = '<div class="empty">Commande introuvable.<br><br><a class="btn" href="index.html">Voir les événements</a></div>'; return; }
+  if (order.status === "paye") { App.go("mes-billets.html"); return; }
+
+  let settings = {};
+  try {
+    (await App.q(sb.from("settings").select("key,value"))).forEach((r) => (settings[r.key] = r.value));
+  } catch (e) { console.error(e); }
+  const testMode = settings.public_test_mode === "true";
+
+  let method = null, payId = null, poll = null, cdTimer = null;
+  let verifying = payments.some((p) => p.status === "a_verifier");
+  if (verifying) payId = payments.find((p) => p.status === "a_verifier").id;
+  const amount = money(order.total, order.currency);
+  const NAMES = { mpesa: "M-Pesa", airtel: "Airtel Money", orange: "Orange Money", test: "Test" };
+
+  function expiredView() {
+    clearInterval(poll); clearInterval(cdTimer);
+    root.innerHTML = `<div class="panel"><h2>Réservation expirée</h2>
+      <p>Les places ne sont plus bloquées pour vous. Si vous avez validé un paiement juste avant la fin du délai, votre billet apparaîtra dans « Mes billets ».</p>
+      <div class="inline"><a class="btn" href="evenement.html?id=${esc(order.event_id)}">Choisir à nouveau mes billets</a>
+      <a class="btn btn-ghost" href="mes-billets.html">Mes billets</a></div></div>`;
+    if (window.Bot) Bot.announce("Votre réservation a expiré (10 minutes). Recommencez votre achat pour bloquer à nouveau vos places.", "error");
+  }
+
+  function success() {
+    clearInterval(poll); clearInterval(cdTimer);
+    root.innerHTML = `<div class="panel center"><h2>Paiement confirmé ✔</h2>
+      <p>Votre billet est prêt. Vous allez être redirigé vers « Mes billets »…</p></div>`;
+    App.toast("Paiement confirmé !", "ok");
+    if (window.Bot) Bot.announce("Paiement confirmé ! Vos billets sont dans « Mes billets ». Présentez le QR code à l'entrée.", "ok");
+    setTimeout(() => App.go("mes-billets.html"), 1800);
+  }
+
+  function failure(text) {
+    clearInterval(poll);
+    const msg = text || "Le paiement n'a pas abouti (refusé, solde insuffisant, mauvais code PIN ou délai dépassé). Vous pouvez réessayer.";
+    if (window.Bot) Bot.announce(msg, "error");
+    renderStage(msg);
+  }
+
+  async function check() {
+    try {
+      const o = await App.q(sb.from("orders").select("status").eq("id", orderId).single());
+      if (o.status === "paye") return success();
+      if (payId) {
+        const p = await App.q(sb.from("payments").select("status").eq("id", payId).single());
+        if (p.status === "echoue" || p.status === "expire") {
+          verifying = false;
+          failure(p.status === "echoue" ? null : "Le délai de paiement est dépassé.");
+        }
+      }
+    } catch (e) { console.error(e); }
+  }
+  function startPoll() { clearInterval(poll); poll = setInterval(check, 3000); }
+
+  function tick() {
+    const el = App.$("#cd");
+    if (verifying) { if (el) el.textContent = "en pause pendant la vérification"; return; }
+    const ms = new Date(order.expires_at) - Date.now();
+    if (ms <= 0) { expiredView(); return; }
+    if (el) el.textContent = Math.floor(ms / 60000) + ":" + String(Math.floor(ms / 1000) % 60).padStart(2, "0");
+  }
+
+  /* ---------- Écran d'attente (notification sur le téléphone) ---------- */
+  function waitingView(phone) {
+    const stage = App.$("#stage");
+    stage.innerHTML = `<div class="panel center"><span class="pulse"></span>
+      <h3 style="margin-top:14px">${method === "test" ? "Paiement de test" : "Validez sur votre téléphone"}</h3>
+      <p>${method === "test" ? "Mode test : aucun argent n'est débité." :
+        `Une demande de paiement de <b>${esc(amount)}</b> est envoyée au <b>${esc(phone)}</b> (${esc(NAMES[method])}). Acceptez-la en entrant votre code PIN.`}</p>
+      ${method === "test" ? '<button class="btn" id="sim">Simuler la validation</button>' : ""}
+      <p style="margin-top:14px"><button class="btn btn-ghost btn-sm" id="cancel">Changer de moyen de paiement</button></p></div>`;
+    const sim = App.$("#sim");
+    if (sim) sim.onclick = () => App.run(sim, async () => {
+      await App.rpc("simulate_payment_success", { p_payment_id: payId });
+      await check();
+    });
+    App.$("#cancel").onclick = () => { clearInterval(poll); payId = null; renderStage(); };
+    startPoll();
+  }
+
+  /* ---------- Écran de vérification du code de transfert ---------- */
+  function verifyingView() {
+    App.$("#stage").innerHTML = `<div class="panel center"><span class="pulse"></span>
+      <h3 style="margin-top:14px">Vérification en cours</h3>
+      <p>Nous avons reçu votre code de transfert. Votre billet sera livré dès que le paiement est confirmé. Vous pouvez quitter cette page : il apparaîtra dans « Mes billets ».</p>
+      <a class="btn btn-ghost btn-sm" href="mes-billets.html">Aller à Mes billets</a></div>`;
+    startPoll();
+  }
+
+  /* ---------- Choix du moyen de paiement ---------- */
+  function renderStage(message) {
+    const stage = App.$("#stage");
+    method = null;
+    stage.innerHTML = `
+      ${message ? `<div class="alert bad">${esc(message)}</div>` : ""}
+      <div class="panel">
+        <h3>Choisissez votre réseau</h3>
+        <div class="networks" role="group" aria-label="Réseau de paiement">
+          <button type="button" class="net" data-m="mpesa" aria-pressed="false">M-Pesa</button>
+          <button type="button" class="net" data-m="airtel" aria-pressed="false">Airtel Money</button>
+          <button type="button" class="net" data-m="orange" aria-pressed="false">Orange Money</button>
+          ${testMode ? '<button type="button" class="net" data-m="test" aria-pressed="false" style="grid-column:1/-1">Test sans argent (mode test)</button>' : ""}
+          <button type="button" class="net soon" disabled style="grid-column:1/-1">Carte bancaire : bientôt disponible</button>
+        </div>
+        <label class="field" id="phone-box"><span>Votre numéro de téléphone</span>
+          <input type="tel" id="phone" placeholder="Ex. 0812345678" autocomplete="tel" value="${esc((App._me && App._me.phone) || "")}"></label>
+        <button class="btn btn-block" id="pay-btn">Payer ${esc(amount)}</button>
+      </div>
+      <details class="panel"><summary>J'ai déjà payé par transfert : saisir le code</summary>
+        <p class="small muted">Envoyez exactement <b>${esc(amount)}</b> au numéro ci-dessous, puis entrez le code reçu par SMS.</p>
+        <label class="field"><span>Réseau utilisé</span>
+          <select id="cnet"><option value="mpesa">M-Pesa</option><option value="airtel">Airtel Money</option><option value="orange">Orange Money</option></select></label>
+        <p class="alert small" id="recv"></p>
+        <label class="field"><span>Code de transfert (reçu par SMS)</span><input id="ccode" autocomplete="off" maxlength="40"></label>
+        <label class="field"><span>Numéro utilisé pour payer (facultatif)</span><input id="cphone" type="tel"></label>
+        <button class="btn" id="csend">Vérifier mon paiement</button>
+      </details>`;
+
+    App.$$(".net[data-m]").forEach((b) => b.onclick = () => {
+      method = b.dataset.m;
+      App.$$(".net[data-m]").forEach((x) => x.setAttribute("aria-pressed", x === b));
+      App.$("#phone-box").classList.toggle("hidden", method === "test");
+    });
+
+    App.$("#pay-btn").onclick = (ev) => App.run(ev.currentTarget, async () => {
+      if (!method) throw new Error("Choisissez d'abord votre réseau de paiement.");
+      const phone = App.$("#phone").value.trim();
+      if (method !== "test" && !phone) throw new Error("Entrez votre numéro de téléphone.");
+      payId = await App.rpc("start_payment", { p_order_id: orderId, p_method: method, p_phone: phone || null });
+      waitingView(phone);
+    });
+
+    const recv = () => {
+      const n = settings["public_receiver_" + App.$("#cnet").value];
+      App.$("#recv").textContent = n ? "Numéro à créditer : " + n :
+        "Le numéro de réception n'est pas encore renseigné. Demandez-le à Biso.nabiso-Ticket.";
+    };
+    App.$("#cnet").onchange = recv; recv();
+
+    App.$("#csend").onclick = (ev) => App.run(ev.currentTarget, async () => {
+      const r = await App.rpc("submit_transfer_code", {
+        p_order_id: orderId, p_network: App.$("#cnet").value,
+        p_code: App.$("#ccode").value, p_phone: App.$("#cphone").value || null });
+      payId = r.payment_id;
+      if (r.status === "confirme") return success();
+      if (r.status === "remboursement") return failure("Votre paiement est arrivé après l'expiration et les places ne sont plus disponibles. Contactez-nous pour un remboursement.");
+      verifying = true;
+      verifyingView();
+    });
+  }
+
+  /* ---------- Page ---------- */
+  root.innerHTML = `
+    <h1 style="font-size:1.9rem">Paiement</h1>
+    <div class="panel">
+      <h3>${esc(order.events ? order.events.title : "Votre commande")}</h3>
+      ${order.events ? `<p class="muted small">${esc(App.fmtDate(order.events.starts_at))}</p>` : ""}
+      ${order.order_lines.map((l) => `<div class="inline" style="justify-content:space-between"><span>${esc(l.holder_name)} · ${esc(l.ticket_lots ? l.ticket_lots.name : "")}</span><span>${money(l.unit_price, order.currency)}</span></div>`).join("")}
+      <hr style="border:0;border-top:1px solid var(--line);margin:12px 0">
+      <div class="inline" style="justify-content:space-between"><b>Total</b><span class="price">${esc(amount)}</span></div>
+      <p class="alert warn small" style="margin:14px 0 0">Vos places sont réservées : <span id="cd" class="countdown" style="font-size:1.1rem"></span></p>
+    </div>
+    <div id="stage"></div>`;
+
+  if (!verifying && new Date(order.expires_at) <= new Date()) { expiredView(); return; }
+  cdTimer = setInterval(tick, 1000); tick();
+  if (verifying) verifyingView(); else renderStage();
+})();
+</script>
+</body>
+</html>

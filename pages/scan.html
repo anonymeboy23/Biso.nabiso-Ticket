@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Contrôle d'entrée · Biso.nabiso-Ticket</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main id="main">
+  <div class="wrap page" style="max-width:640px" id="scanpage">
+    <h1 style="font-size:1.9rem">Contrôle d'entrée</h1>
+
+    <div class="panel">
+      <div class="row">
+        <label class="field"><span>Événement</span><select id="ev"></select></label>
+        <label class="field"><span>Porte</span><input id="gate" maxlength="30"></label>
+      </div>
+      <div class="inline" style="justify-content:space-between">
+        <div><span class="muted small">Personnes entrées</span><div class="counter" id="count">–</div></div>
+        <button class="btn" id="cam">Démarrer la caméra</button>
+      </div>
+    </div>
+
+    <div id="reader" class="hidden"></div>
+    <div id="result" aria-live="assertive"></div>
+
+    <div class="panel">
+      <h3>Recherche manuelle</h3>
+      <form id="search" class="inline">
+        <input id="sq" placeholder="Nom, téléphone ou code du billet" style="flex:1;min-width:200px" autocomplete="off">
+        <button class="btn" type="submit">Chercher</button>
+      </form>
+      <div id="hits" style="margin-top:10px"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Cas signalés par vous</h3>
+      <div id="incs" class="muted small">Aucun cas signalé.</div>
+    </div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script src="../scripts/config.js"></script>
+<script src="../scripts/app.js"></script>
+<script src="../scripts/Bot.js"></script>
+<script>
+(async () => {
+  const { ok, me } = await App.start({ active: "scan", roles: ["personnel", "proprietaire"] });
+  if (!ok) return;
+  const { esc, $ } = App;
+  const sb = App.sb;
+
+  /* ---------- Événements affectés ---------- */
+  let evs = [];
+  try {
+    if (me.role === "proprietaire") {
+      const rows = await App.q(sb.from("events").select("id,title,starts_at").in("status", ["publie", "complet"]).order("starts_at"));
+      evs = rows.map((r) => ({ id: r.id, title: r.title, gate: "Porte 1" }));
+    } else {
+      const rows = await App.q(sb.from("staff_assignments").select("gate, events(id,title,starts_at)").eq("user_id", me.id));
+      evs = rows.filter((r) => r.events).map((r) => ({ id: r.events.id, title: r.events.title, gate: r.gate }));
+    }
+  } catch (e) { App.error(e); }
+  if (!evs.length) {
+    $("#scanpage").innerHTML = `<h1 style="font-size:1.9rem">Contrôle d'entrée</h1><div class="empty">Aucun événement ne vous est affecté pour le moment.<br>Demandez à l'organisateur de vous affecter avec votre email.</div>`;
+    return;
+  }
+  $("#ev").innerHTML = evs.map((e) => `<option value="${esc(e.id)}">${esc(e.title)}</option>`).join("");
+  const evId = () => $("#ev").value;
+  const gate = () => $("#gate").value.trim() || "Porte 1";
+  const setGate = () => { $("#gate").value = (evs.find((e) => e.id === evId()) || {}).gate || "Porte 1"; };
+  setGate();
+
+  /* ---------- Compteur ---------- */
+  async function updateCount() {
+    try {
+      const c = await App.rpc("entry_counts", { p_event_id: evId() });
+      $("#count").textContent = c.entered + " / " + c.total;
+    } catch (e) { console.error(e); }
+  }
+
+  /* ---------- Résultat d'un scan ---------- */
+  let html5 = null, busy = false;
+  function release() {
+    busy = false;
+    $("#result").innerHTML = "";
+    if (html5) { try { html5.resume(); } catch (_) { /* ignore */ } }
+  }
+
+  const BOT_MSG = {
+    deja_utilise: "Billet refusé : il a déjà été utilisé à l'entrée.",
+    faux: "Billet refusé : ce code n'existe pas dans le système (faux billet ou QR illisible).",
+    autre_evenement: "Billet refusé : il est réel mais pour un autre événement.",
+    en_attente: "Billet en attente : l'organisateur doit encore confirmer le détenteur.",
+    annule: "Billet refusé : il est annulé ou bloqué.",
+  };
+
+  function showResult(r) {
+    const box = $("#result");
+    let cls = "bad", title = "", body = "";
+    if (r.result === "valide") {
+      cls = "ok"; title = "Billet valide";
+      body = `<div class="who">${esc(r.holder_name)}</div>
+        <p class="muted" style="margin:0 0 8px">${esc(r.category || "")}${r.lot ? " · " + esc(r.lot) : ""}</p>
+        <div id="scan-photo" class="scan-photo" aria-live="polite"></div>
+        <p class="small">Comparez ce nom avec la personne (pièce d'identité si besoin).</p>
+        <div class="inline" style="justify-content:center">
+          <button class="btn btn-ok" id="enter">Faire entrer</button>
+          <button class="btn btn-danger" id="notholder">Ce n'est pas le détenteur</button></div>`;
+    } else if (r.result === "deja_utilise") {
+      title = "Déjà utilisé";
+      body = `<p>Ce billet a servi${r.used_at ? " le " + esc(App.fmtShort(r.used_at)) : ""}.${r.holder_name ? "<br>Détenteur : <b>" + esc(r.holder_name) + "</b>" : ""}</p>`;
+    } else if (r.result === "faux") {
+      title = "Billet faux ou inconnu"; body = "<p>Ce code n'existe pas. Ne pas faire entrer.</p>";
+    } else if (r.result === "autre_evenement") {
+      cls = "warn"; title = "Autre événement";
+      body = `<p>Ce billet est valable pour : <b>${esc(r.other_event || "un autre événement")}</b>.</p>`;
+    } else if (r.result === "en_attente") {
+      cls = "warn"; title = "En attente de confirmation";
+      body = `<p>Un cas est déjà ouvert pour ce billet. Attendez la décision de l'organisateur.</p>`;
+    } else {
+      title = "Billet annulé ou bloqué"; body = "<p>Ne pas faire entrer.</p>";
+    }
+    const next = r.result === "valide" ? "" : '<p style="margin-top:12px"><button class="btn btn-ghost" id="next">Scanner le suivant</button></p>';
+    box.innerHTML = `<div class="scan-result ${cls}"><div class="big">${esc(title)}</div>${body}${next}</div>`;
+    if (r.result === "valide" && r.photo_path) {
+      const photoBox = $("#scan-photo");
+      const actions = [$("#enter"), $("#notholder")];
+      actions.forEach((button) => { button.disabled = true; });
+      photoBox.textContent = "Chargement de la photo…";
+      (async () => {
+        const { data, error } = await sb.storage.from("ticket-photos").createSignedUrl(r.photo_path, 120);
+        if (error) throw new Error(error.message);
+        const image = document.createElement("img");
+        image.src = data.signedUrl;
+        image.alt = "Photo du détenteur du billet";
+        image.className = "scan-ticket-photo";
+        photoBox.replaceChildren(image);
+        actions.forEach((button) => { button.disabled = false; });
+      })().catch((error) => {
+        App.error(error);
+        if (!r.photo_required) actions.forEach((button) => { button.disabled = false; });
+      });
+    } else if (r.result === "valide" && r.photo_required) {
+      $("#scan-photo").textContent = "Aucune photo enregistrée pour ce billet : vérifiez le nom et la pièce d’identité.";
+      $("#enter").disabled = true;
+    }
+    if (navigator.vibrate) navigator.vibrate(r.result === "valide" ? 80 : [120, 60, 120]);
+    if (BOT_MSG[r.result] && window.Bot) Bot.announce(BOT_MSG[r.result], r.result === "en_attente" ? "" : "error");
+    box.scrollIntoView({ behavior: "smooth", block: "center" });
+
+    const nx = $("#next"); if (nx) nx.onclick = release;
+    const en = $("#enter");
+    if (en) en.onclick = () => App.run(en, async () => {
+      const res = await App.rpc("confirm_entry", { p_ticket_id: r.ticket_id, p_gate: gate() });
+      if (res.ok) {
+        box.innerHTML = `<div class="scan-result ok"><div class="big">Entrée enregistrée ✔</div><p>${esc(r.holder_name)}</p></div>`;
+        updateCount();
+        setTimeout(release, 1200);
+      } else {
+        box.innerHTML = `<div class="scan-result bad"><div class="big">Entrée refusée</div><p>${esc(res.message)}</p><p><button class="btn btn-ghost" id="next2">Scanner le suivant</button></p></div>`;
+        if (window.Bot) Bot.announce(res.message, "error");
+        $("#next2").onclick = release;
+      }
+    });
+    const nh = $("#notholder");
+    if (nh) nh.onclick = () => {
+      const who = prompt("Nom de la personne qui se présente avec ce billet :");
+      if (!who || !who.trim()) return;
+      App.run(nh, async () => {
+        await App.rpc("report_not_holder", { p_ticket_id: r.ticket_id, p_present_name: who.trim() });
+        box.innerHTML = `<div class="scan-result warn"><div class="big">Signalé à l'organisateur</div>
+          <p>Mettez <b>${esc(who.trim())}</b> de côté. Le billet est en attente : l'organisateur contacte le détenteur.<br>La décision s'affichera dans « Cas signalés ».</p>
+          <p><button class="btn btn-ghost" id="next3">Scanner le suivant</button></p></div>`;
+        $("#next3").onclick = release;
+        if (window.Bot) Bot.announce("Cas signalé pour " + who.trim() + ". Vous serez prévenu dès que l'organisateur aura décidé.", "");
+        loadIncidents();
+      });
+    };
+  }
+
+  async function check(arg) {
+    busy = true;
+    try {
+      const r = await App.rpc("scan_ticket", {
+        p_event_id: evId(), p_gate: gate(), p_code: arg.code || null, p_ticket_id: arg.ticket_id || null });
+      showResult(r);
+    } catch (e) { App.error(e); release(); }
+  }
+
+  /* ---------- Caméra ---------- */
+  function onDecode(text) {
+    if (busy) return;
+    busy = true;
+    try { html5.pause(true); } catch (_) { /* ignore */ }
+    check({ code: text });
+  }
+  $("#cam").onclick = async () => {
+    if (html5) {
+      try { await html5.stop(); } catch (_) { /* ignore */ }
+      html5 = null; busy = false;
+      $("#reader").classList.add("hidden"); $("#cam").textContent = "Démarrer la caméra";
+      return;
+    }
+    $("#reader").classList.remove("hidden");
+    html5 = new Html5Qrcode("reader");
+    try {
+      await html5.start({ facingMode: "environment" }, { fps: 10, qrbox: { width: 230, height: 230 } }, onDecode, () => {});
+      $("#cam").textContent = "Arrêter la caméra";
+    } catch (e) {
+      html5 = null;
+      $("#reader").classList.add("hidden");
+      App.error(new Error("Caméra indisponible. Autorisez la caméra dans le navigateur (le site doit être en https ou en local) ou utilisez la recherche manuelle."));
+    }
+  };
+
+  /* ---------- Recherche manuelle ---------- */
+  $("#search").onsubmit = (e) => {
+    e.preventDefault();
+    const v = $("#sq").value.trim();
+    if (!v) return;
+    App.run(e.target.querySelector("button"), async () => {
+      if (/^[0-9a-f]{64}$/i.test(v)) { await check({ code: v }); return; }
+      const hits = await App.rpc("search_tickets", { p_event_id: evId(), p_query: v });
+      $("#hits").innerHTML = hits.length ? hits.map((h) => `<div class="lot">
+          <div><b>${esc(h.holder_name)}</b> <span class="chip">${esc(h.lot)}</span>
+            ${h.phone_end ? `<span class="muted small"> · …${esc(h.phone_end)}</span>` : ""}
+            <br><span class="muted small">Statut : ${esc(h.status)}</span></div>
+          <button class="btn btn-sm" data-check="${esc(h.id)}">Vérifier</button></div>`).join("") :
+        '<p class="muted small">Aucun billet trouvé (tapez au moins 3 caractères).</p>';
+    });
+  };
+  $("#hits").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-check]");
+    if (b && !busy) check({ ticket_id: b.dataset.check });
+  });
+
+  /* ---------- Cas signalés (suivi des décisions) ---------- */
+  const seen = new Map();
+  const ST = { ouvert: ["En attente", "warn"], autorise: ["Autorisé", "ok"], refuse: ["Refusé", "bad"] };
+  async function loadIncidents() {
+    try {
+      const rows = await App.q(sb.from("incidents").select("id,status,present_person_name,created_at")
+        .eq("event_id", evId()).eq("reported_by", me.id).order("created_at", { ascending: false }).limit(10));
+      rows.forEach((r) => {
+        if (seen.get(r.id) === "ouvert" && r.status !== "ouvert") {
+          const txt = "Décision pour " + r.present_person_name + " : " + (r.status === "autorise" ? "entrée autorisée." : "entrée refusée.");
+          App.toast(txt, r.status === "autorise" ? "ok" : "error");
+          if (window.Bot) Bot.announce(txt, r.status === "autorise" ? "ok" : "error");
+        }
+        seen.set(r.id, r.status);
+      });
+      $("#incs").innerHTML = rows.length ? rows.map((r) => {
+        const [l, c] = ST[r.status];
+        return `<div class="lot"><div><b>${esc(r.present_person_name)}</b><br><span class="muted small">${esc(App.fmtShort(r.created_at))}</span></div><span class="chip ${c}">${l}</span></div>`;
+      }).join("") : "Aucun cas signalé.";
+    } catch (e) { console.error(e); }
+  }
+
+  $("#ev").onchange = () => { setGate(); seen.clear(); updateCount(); loadIncidents(); };
+  updateCount(); loadIncidents();
+  setInterval(updateCount, 15000);
+  setInterval(loadIncidents, 10000);
+})();
+</script>
+</body>
+</html>

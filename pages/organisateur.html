@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Espace organisateur · Biso.nabiso-Ticket</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main id="main">
+  <div class="wrap page">
+    <h1 style="font-size:1.9rem">Espace organisateur</h1>
+    <div id="access"></div>
+    <div class="tabs" role="tablist" id="tabs">
+      <button type="button" role="tab" data-tab="events" aria-selected="true">Mes événements</button>
+      <button type="button" role="tab" data-tab="incidents" aria-selected="false">Cas signalés</button>
+    </div>
+    <div id="p-events"><div id="em"></div></div>
+    <div id="p-incidents" class="hidden">
+      <p class="muted">Une personne se présente avec le billet d'un autre. Contactez le détenteur pour confirmer, puis décidez.</p>
+      <div id="inc"></div>
+    </div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="../scripts/config.js"></script>
+<script src="../scripts/app.js"></script>
+<script src="../scripts/Bot.js"></script>
+<script src="../scripts/Eventsmanager.js"></script>
+<script>
+(async () => {
+  const { ok, me } = await App.start({ active: "org", roles: ["organisateur", "proprietaire"] });
+  if (!ok) return;
+  if (me.role === "proprietaire") { App.go("admin.html"); return; }
+  const { esc } = App;
+
+  const expiry = me.role_expires_at ? new Date(me.role_expires_at) : null;
+  if (expiry && expiry <= new Date()) {
+    App.showBlock(`<h2>Accès indisponible</h2>
+      <p>Votre accès organisateur a expiré. Vos données sont conservées ; contactez Biso.nabiso-Ticket pour le renouveler.</p>
+      <a class="btn" href="index.html">Retour à l'accueil</a>`);
+    return;
+  }
+  if (expiry) {
+    const days = Math.ceil((expiry - Date.now()) / 864e5);
+    const className = days <= 3 ? "warn" : "ok";
+    App.$("#access").innerHTML = `<div class="alert ${className}">Votre accès organisateur se termine le ${esc(App.fmtShort(expiry))} (${days} jour${days === 1 ? "" : "s"} restant${days === 1 ? "" : "s"}).</div>`;
+  }
+  await EventsManager.mount(App.$("#em"), { me, owner: false, orgs: [], operations: false, staff: true });
+
+  App.$("#tabs").onclick = async (e) => {
+    const b = e.target.closest("[data-tab]");
+    if (!b) return;
+    const t = b.dataset.tab;
+    App.$$("#tabs button").forEach((x) => x.setAttribute("aria-selected", x === b));
+    App.$("#p-events").classList.toggle("hidden", t !== "events");
+    App.$("#p-incidents").classList.toggle("hidden", t !== "incidents");
+    if (t === "incidents") App.$("#inc").innerHTML = '<div class="empty">Le suivi des incidents sera disponible quand le module de contrôle sera relié à la base de données.</div>';
+  };
+})();
+</script>
+</body>
+</html>

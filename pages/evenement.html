@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Événement · Biso.nabiso-Ticket</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main id="main">
+  <div class="wrap page" id="event"><div class="empty">Chargement…</div></div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="../scripts/config.js"></script>
+<script src="../scripts/app.js"></script>
+<script src="../scripts/Bot.js"></script>
+<script>
+(async () => {
+  const { ok, me } = await App.start({ active: "home" });
+  if (!ok) return;
+  const { esc, money } = App;
+  const root = App.$("#event");
+  const id = App.qs("id");
+  if (!id) {
+    App.$("#event").innerHTML = '<div class="empty">Aucun événement sélectionné.<br><br><a class="btn" href="index.html#evenements">Voir les événements</a></div>';
+    return;
+  }
+
+  let ev = null;
+  try {
+    ev = await App.q(App.sb.from("events")
+      .select("*, ticket_categories(id,name,perks,sort_order), ticket_lots(id,category_id,name,price,quantity,sold,held,active,created_at)")
+      .eq("id", id).maybeSingle());
+  } catch (e) { App.error(e); }
+  if (!ev) {
+    root.innerHTML = '<div class="empty">Cet événement est introuvable ou n\'est pas encore publié.<br><br><a class="btn" href="index.html">Voir les événements</a></div>';
+    return;
+  }
+
+  const past = new Date(ev.starts_at) < new Date();
+  const sellable = ev.status === "publie" && !past;
+  const left = (l) => l.quantity - l.sold - l.held;
+  const cats = ev.ticket_categories.slice().sort((a, b) => a.sort_order - b.sort_order);
+  const lots = ev.ticket_lots.filter((l) => l.active)
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const MAX = 10;
+  const qty = {};
+  lots.forEach((l) => (qty[l.id] = 0));
+  const count = () => Object.values(qty).reduce((a, b) => a + b, 0);
+  const total = () => lots.reduce((s, l) => s + qty[l.id] * Number(l.price), 0);
+
+  let notice = "";
+  if (ev.status === "complet") notice = "Cet événement est complet pour le moment. De nouveaux billets peuvent être ajoutés : repassez bientôt.";
+  else if (ev.status === "annule") notice = "Cet événement a été annulé.";
+  else if (ev.status === "termine" || past) notice = "Cet événement est terminé.";
+  else if (!sellable) notice = "La vente n'est pas ouverte pour cet événement.";
+
+  function lotHtml(l) {
+    const n = left(l);
+    const tag = n <= 0 ? '<span class="chip bad">Épuisé</span>' :
+      n <= 5 ? `<span class="chip warn">Plus que ${n} place${n > 1 ? "s" : ""}</span>` : "";
+    return `<div class="lot"><div><b>${esc(l.name)}</b> ${tag}<br>
+        <span class="price">${money(l.price, ev.currency)}</span></div>
+      ${sellable && n > 0 ? `<div class="qty" role="group" aria-label="Quantité pour ${esc(l.name)}">
+        <button type="button" data-lot="${esc(l.id)}" data-d="-1" aria-label="Moins">−</button>
+        <output id="out-${esc(l.id)}">0</output>
+        <button type="button" data-lot="${esc(l.id)}" data-d="1" aria-label="Plus">+</button></div>` : ""}</div>`;
+  }
+
+  root.innerHTML = `
+    <div class="event-head">
+      <div class="event-poster" data-poster="${esc(ev.poster_url || "")}"></div>
+      <div>
+        <div class="inline" style="margin-bottom:10px">${App.statusChip(ev.status)}</div>
+        <h1>${esc(ev.title)}</h1>
+        <p><b>${esc(App.fmtDate(ev.starts_at))}</b><br>${esc([ev.venue, ev.city].filter(Boolean).join(", "))}</p>
+        ${ev.description ? `<p class="muted" style="white-space:pre-line">${esc(ev.description)}</p>` : ""}
+      </div>
+    </div>
+    ${notice ? `<div class="alert warn">${esc(notice)}</div>` : ""}
+    <section id="step1">
+      <h2>Choisissez vos billets</h2>
+      ${cats.length ? cats.map((c) => {
+        const cl = lots.filter((l) => l.category_id === c.id);
+        if (!cl.length) return "";
+        return `<div class="panel"><h3>${esc(c.name)}</h3>${c.perks ? `<p class="muted small">${esc(c.perks)}</p>` : ""}${cl.map(lotHtml).join("")}</div>`;
+      }).join("") : '<div class="empty">Les billets seront bientôt disponibles.</div>'}
+      ${sellable ? `<div class="cart-bar"><div><b id="cart-count">0 billet</b><br><span class="price" id="cart-total">${money(0, ev.currency)}</span></div>
+        <button class="btn" id="go" disabled>Continuer</button></div>` : ""}
+    </section>
+    <section id="step2" class="hidden"></section>`;
+  App.applyPosters(root);
+
+  /* ---------- Étape 1 : quantités ---------- */
+  function refreshCart() {
+    const n = count();
+    App.$("#cart-count").textContent = n + " billet" + (n > 1 ? "s" : "");
+    App.$("#cart-total").textContent = money(total(), ev.currency);
+    App.$("#go").disabled = n === 0;
+    lots.forEach((l) => {
+      const out = App.$("#out-" + l.id);
+      if (!out) return;
+      out.textContent = qty[l.id];
+      const minus = App.$(`[data-lot="${l.id}"][data-d="-1"]`), plus = App.$(`[data-lot="${l.id}"][data-d="1"]`);
+      minus.disabled = qty[l.id] <= 0;
+      plus.disabled = qty[l.id] >= left(l) || n >= MAX;
+    });
+  }
+  if (sellable) {
+    root.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-lot]");
+      if (!b) return;
+      const l = lots.find((x) => x.id === b.dataset.lot);
+      const next = qty[l.id] + parseInt(b.dataset.d, 10);
+      if (next < 0 || next > left(l) || count() - qty[l.id] + next > MAX) return;
+      qty[l.id] = next;
+      refreshCart();
+    });
+    refreshCart();
+
+    App.$("#go").onclick = () => {
+      if (!me) {
+        App.toast("Connectez-vous pour continuer : vos billets sont à votre nom.");
+        App.go("connexion.html?next=" + encodeURIComponent("evenement.html?id=" + ev.id));
+        return;
+      }
+      showStep2();
+    };
+  }
+
+  /* ---------- Étape 2 : un nom par billet ---------- */
+  function showStep2() {
+    const tickets = [];
+    lots.forEach((l) => { for (let i = 0; i < qty[l.id]; i++) tickets.push(l); });
+    const catName = (l) => (cats.find((c) => c.id === l.category_id) || {}).name || "";
+    App.$("#step1").classList.add("hidden");
+    const s2 = App.$("#step2");
+    s2.classList.remove("hidden");
+    s2.innerHTML = `<h2>Qui utilisera chaque billet ?</h2>
+      <p class="muted">Le nom est inscrit sur le billet et vérifié à l'entrée, avec une pièce d'identité si besoin. Cela protège contre le vol de billets.</p>
+      ${ev.require_ticket_photo ? '<div class="alert warn">L’organisateur exige une photo pour chaque détenteur. Elle sera stockée de façon privée et visible par le personnel autorisé au contrôle.</div>' : '<p class="muted small">La photo est facultative. Si vous en ajoutez une, elle sera stockée de façon privée et visible par le personnel autorisé au contrôle.</p>'}
+      <form id="holders">
+        ${tickets.map((l, i) => `<div class="panel"><h3>Billet ${i + 1} : ${esc(catName(l))} · ${esc(l.name)} (${money(l.price, ev.currency)})</h3>
+          <div class="row">
+            <label class="field"><span>Nom complet du détenteur</span>
+              <input name="name${i}" required maxlength="80" autocomplete="name" value="${i === 0 ? esc(me.full_name || "") : ""}"></label>
+            <label class="field"><span>Téléphone (facultatif)</span>
+              <input name="phone${i}" type="tel" maxlength="20" value="${i === 0 ? esc(me.phone || "") : ""}"></label>
+          </div></div>`).join("")}
+        <div class="cart-bar"><div><b>${tickets.length} billet${tickets.length > 1 ? "s" : ""}</b><br><span class="price">${money(total(), ev.currency)}</span></div>
+          <div class="inline"><button type="button" class="btn btn-ghost" id="back">Retour</button>
+          <button class="btn" type="submit">Aller au paiement</button></div></div>
+      </form>`;
+    window.scrollTo({ top: 0 });
+    App.$("#back").onclick = () => { s2.classList.add("hidden"); App.$("#step1").classList.remove("hidden"); };
+    tickets.forEach((_, i) => {
+      const panel = App.$("#holders").children[i];
+      const photo = document.createElement("label");
+      photo.className = "field";
+      photo.innerHTML = `<span>Photo du détenteur ${ev.require_ticket_photo ? "(obligatoire)" : "(facultative)"}</span>
+        <input name="photo${i}" type="file" accept="image/jpeg,image/png,image/webp" capture="user" ${ev.require_ticket_photo ? "required" : ""}>
+        <span class="muted small">JPEG, PNG ou WebP · 5 Mo maximum</span>`;
+      panel.appendChild(photo);
+    });
+    App.$("#holders").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      await App.run(e.target.querySelector('[type="submit"]'), async () => {
+        const uploaded = [];
+        try {
+          const lines = [];
+          for (let i = 0; i < tickets.length; i++) {
+            const file = f.get("photo" + i);
+            let photoPath = null;
+            if (file && file.size) {
+              if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
+                throw new Error("Chaque photo doit être au format JPEG, PNG ou WebP et peser 5 Mo maximum.");
+              }
+              const extension = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[file.type];
+              photoPath = `${me.id}/${crypto.randomUUID()}.${extension}`;
+              const { error } = await App.sb.storage.from("ticket-photos").upload(photoPath, file, {
+                contentType: file.type, upsert: false,
+              });
+              if (error) throw new Error(error.message);
+              uploaded.push(photoPath);
+            }
+            if (ev.require_ticket_photo && !photoPath) throw new Error("Ajoutez une photo pour chaque détenteur.");
+            lines.push({
+              lot_id: tickets[i].id,
+              holder_name: f.get("name" + i).trim(),
+              holder_phone: (f.get("phone" + i) || "").trim(),
+              photo_path: photoPath,
+            });
+          }
+          const orderId = await App.rpc("create_order", { p_event_id: ev.id, p_lines: lines });
+          App.go("paiement.html?order=" + encodeURIComponent(orderId));
+        } catch (error) {
+          if (uploaded.length) {
+            const { error: cleanupError } = await App.sb.storage.from("ticket-photos").remove(uploaded);
+            if (cleanupError) throw new Error(`${error.message} (Le nettoyage des photos temporaires a échoué : ${cleanupError.message})`);
+          }
+          throw error;
+        }
+      });
+    };
+  }
+})();
+</script>
+</body>
+</html>

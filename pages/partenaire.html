@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Devenir partenaire · Biso.nabiso-Ticket</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../styles/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main id="main">
+  <div class="wrap page" style="max-width:640px" id="box">
+    <h1 style="font-size:2.2rem">Vendez vos billets avec Biso.nabiso-Ticket</h1>
+    <p class="muted">Vous organisez un concert, un spectacle ou un festival ? Envoyez votre demande. Après validation par notre équipe, vous aurez un espace pour suivre vos ventes, vos entrées et vos revenus pendant la durée convenue.</p>
+    <div id="content"></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="../scripts/config.js"></script>
+<script src="../scripts/app.js"></script>
+<script src="../scripts/Bot.js"></script>
+<script>
+(async () => {
+  const { ok, me } = await App.start({ active: "partner" });
+  if (!ok) return;
+  const { esc } = App;
+  const box = App.$("#content");
+
+  if (!me) {
+    box.innerHTML = `<div class="panel"><p>Créez un compte ou connectez-vous pour envoyer votre demande.</p>
+      <a class="btn" href="connexion.html?next=partenaire.html">Se connecter ou créer un compte</a></div>`;
+    return;
+  }
+  if (me.role === "organisateur") {
+    box.innerHTML = `<div class="panel"><p>Vous êtes déjà partenaire.</p><a class="btn" href="organisateur.html">Ouvrir mon espace organisateur</a></div>`;
+    return;
+  }
+  if (me.role === "proprietaire") {
+    box.innerHTML = `<div class="panel"><p>Vous êtes le propriétaire du site : les demandes se gèrent dans l'administration.</p><a class="btn" href="admin.html">Ouvrir l'administration</a></div>`;
+    return;
+  }
+
+  async function render() {
+    const mine = await App.q(App.sb.from("partner_requests").select("*").eq("user_id", me.id).order("created_at", { ascending: false }));
+    const LABEL = { en_attente: ["En attente", "warn"], approuvee: ["Approuvée", "ok"], refusee: ["Refusée", "bad"] };
+    const pending = mine.some((r) => r.status === "en_attente");
+    box.innerHTML = `
+      ${mine.length ? `<div class="panel"><h3>Vos demandes</h3>${mine.map((r) => {
+        const [l, c] = LABEL[r.status];
+        return `<div class="lot"><div><b>${esc(r.company_name)}</b><br><span class="muted small">${esc(App.fmtShort(r.created_at))}</span></div><span class="chip ${c}">${l}</span></div>`;
+      }).join("")}</div>` : ""}
+      ${pending ? '<div class="alert">Votre demande est en cours d\'examen. Nous vous contacterons.</div>' : `
+      <form id="f" class="panel">
+        <label class="field"><span>Nom de votre entreprise ou association</span><input name="company" required maxlength="100"></label>
+        <label class="field"><span>Parlez-nous de votre événement</span>
+          <textarea name="message" placeholder="Type d'événement, date prévue, nombre de places attendu…"></textarea></label>
+        <button class="btn" type="submit">Envoyer ma demande</button>
+      </form>`}`;
+    const f = App.$("#f");
+    if (f) f.onsubmit = async (e) => {
+      e.preventDefault();
+      const d = new FormData(f);
+      await App.run(f.querySelector('[type="submit"]'), async () => {
+        await App.q(App.sb.from("partner_requests").insert({
+          user_id: me.id, company_name: d.get("company").trim(), message: d.get("message").trim() || null }));
+        App.toast("Demande envoyée. Nous revenons vers vous.", "ok");
+        await render();
+      });
+    };
+  }
+  try {
+    await render();
+  } catch (error) {
+    App.error(error);
+    box.innerHTML = '<div class="alert warn">Les demandes de partenariat ne sont pas encore configurées dans la base de données. Contactez Biso.nabiso-Ticket pour faire activer votre demande.</div>';
+  }
+})();
+</script>
+</body>
+</html>

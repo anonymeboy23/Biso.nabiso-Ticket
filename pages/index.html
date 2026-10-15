@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Biso.nabiso-Ticket</title>
+    <link rel="stylesheet" href="../styles/style.css" />
+  </head>
+  <body>
+    <div id="nav"></div>
+    <main id="main" class="wrap page">
+      <section class="hero">
+        <div class="panel">
+          <h1>Vivez la culture, en direct</h1>
+          <p>Concerts, spectacles et rencontres : trouvez votre prochaine sortie et gardez vos billets au même endroit.</p>
+          <div class="inline">
+            <a class="btn" href="#evenements">Découvrir les événements</a>
+            <a class="btn btn-ghost" href="partenaire.html">Devenir partenaire</a>
+          </div>
+        </div>
+      </section>
+      <section id="evenements" aria-labelledby="events-title">
+        <h2 id="events-title">Événements à venir</h2>
+        <p class="muted">Trouvez une activité par nom, ville ou date.</p>
+        <div class="filters">
+          <label class="field"><span>Rechercher</span><input id="event-search" type="search" placeholder="Concert, artiste, lieu…"></label>
+          <label class="field"><span>Ville</span><select id="event-city"><option value="">Toutes les villes</option></select></label>
+          <label class="field"><span>Date</span><select id="event-date">
+            <option value="all">Toutes les dates</option>
+            <option value="today">Aujourd'hui</option>
+            <option value="week">7 prochains jours</option>
+            <option value="month">30 prochains jours</option>
+          </select></label>
+        </div>
+        <p id="event-count" class="muted small" aria-live="polite"></p>
+        <div id="event-list" class="grid" aria-live="polite">
+          <div class="empty">Chargement des événements…</div>
+        </div>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="../scripts/config.js"></script>
+    <script src="../scripts/app.js"></script>
+    <script src="../scripts/Eventcatalog.js"></script>
+    <script src="../scripts/Bot.js"></script>
+    <script>
+      App.start({ active: "home", roles: null });
+      EventCatalog.init();
+    </script>
+  </body>
+</html>
