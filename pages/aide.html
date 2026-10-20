@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guide d'utilisation · Biso.nabiso-Ticket</title>
+<link rel="stylesheet" href="../styles/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main id="main">
+  <div class="wrap page" style="max-width:900px">
+    <h1>Guide d'utilisation</h1>
+    <p class="muted">Les étapes principales selon votre espace.</p>
+    <div id="guide"></div>
+  </div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="../scripts/config.js"></script>
+<script src="../scripts/app.js"></script>
+<script src="../scripts/Bot.js"></script>
+<script>
+(async () => {
+  const { me } = await App.start({ active: "guide" });
+  const root = App.$("#guide");
+  const card = (title, body) => `<section class="panel"><h2>${title}</h2>${body}</section>`;
+  const steps = (items) => `<ol>${items.map((item) => `<li style="margin-bottom:10px">${item}</li>`).join("")}</ol>`;
+
+  if (!me || me.role === "client") {
+    root.innerHTML = card("Espace client", steps([
+      "Consultez les événements publiés, puis ouvrez celui qui vous intéresse.",
+      "Choisissez une catégorie et un lot, indiquez le nom et le téléphone de chaque détenteur, puis créez la commande.",
+      "Choisissez M-Pesa, Airtel Money ou Orange Money. Vous pouvez aussi payer par transfert et saisir le code reçu par SMS.",
+      "Après confirmation du paiement, vos billets apparaissent dans « Mes billets ». Présentez le QR code à l'entrée avec une pièce d'identité.",
+      "Pour un billet gratuit, la validation est immédiate. Pour un transfert manuel, le billet devient disponible après vérification."
+    ])) + card("Conseils importants", "<p>Vérifiez le nom du détenteur avant de payer et ne partagez pas votre QR code publiquement. En cas de problème, conservez la référence de commande et le code de transfert.</p>") + card("Devenir partenaire", "<p>Depuis « Devenir partenaire », envoyez le nom de votre organisation et une description de votre événement. L'administration vous répondra après examen.</p>");
+    return;
+  }
+
+  if (me.role === "personnel") {
+    root.innerHTML = card("Espace scanneur / personnel", steps([
+      "Connectez-vous avec le compte personnel affecté à l'événement.",
+      "Ouvrez « Scanner », choisissez l'événement et vérifiez la porte affichée.",
+      "Autorisez la caméra et visez le QR code. Si elle ne fonctionne pas, recherchez par nom, téléphone ou code.",
+      "Comparez le nom affiché avec la pièce d'identité et la personne présente.",
+      "Cliquez sur « Faire entrer » seulement si le billet est valide. Il passe alors à « utilisé ».",
+      "Si le détenteur ne correspond pas, cliquez sur « Ce n'est pas le détenteur » et signalez le cas."
+    ])) + card("Résultats du scan", "<p><b>Valide</b> : l'entrée peut être enregistrée. <b>Déjà utilisé</b> : refusez l'accès. <b>Autre événement</b> : billet réel mais mauvais événement. <b>En attente</b> ou <b>annulé</b> : attendez la décision ou refusez l'accès.</p>");
+    return;
+  }
+
+  if (me.role === "proprietaire") {
+    root.innerHTML = card("Administration", steps([
+      "Dans « Événements », créez les événements, catégories et lots, puis publiez-les après vérification.",
+      "Dans « Partenaires », examinez les demandes et accordez l'accès aux organisateurs.",
+      "Dans « Paiements », comparez le réseau, le code, le montant et la devise avec votre reçu Mobile Money.",
+      "Cliquez sur « Confirmer » : la commande passe à « payée » et les billets deviennent automatiquement « valides ».",
+      "Dans « Scanner », contrôlez les entrées. Dans « Réglages », configurez les numéros de réception et le mode test.",
+      "Traitez les incidents signalés par le personnel après avoir contacté le détenteur."
+    ])) + card("Activation d'un billet", "<p>Ne modifiez pas le billet manuellement. Confirmez le paiement dans « Administration → Paiements » : tous les billets de la commande sont activés automatiquement et apparaissent dans « Mes billets ».</p>") + card("Mode test", "<p>Le mode test simule un paiement sans débiter d'argent. Désactivez-le avant la production et renseignez les vrais numéros de réception.</p>");
+    return;
+  }
+
+  root.innerHTML = card("Espace organisateur", steps([
+    "Créez votre proposition d'événement et envoyez-la pour validation.",
+    "Après publication, gérez vos catégories, vos lots et les informations de l'événement.",
+    "Consultez les ventes et les entrées depuis votre espace. Les paiements et l'activation des billets sont gérés par l'administration.",
+    "Pour les incidents à l'entrée, contactez le détenteur puis autorisez ou refusez le billet."
+  ]));
+})();
+</script>
+</body>
+</html>

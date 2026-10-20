@@ -24,6 +24,23 @@
       <label class="field"><span>Email</span><input type="email" name="email" required autocomplete="email"></label>
       <label class="field"><span>Mot de passe</span><input type="password" name="password" required autocomplete="current-password"></label>
       <button class="btn btn-block" type="submit">Se connecter</button>
+      <p class="small" style="margin:12px 0 0"><button type="button" class="btn btn-ghost btn-sm" id="forgot-link">Mot de passe oublié ?</button></p>
+    </form>
+
+    <form id="f-reset" class="panel hidden">
+      <h2 id="reset-title">Réinitialiser le mot de passe</h2>
+      <div id="reset-request">
+        <p class="muted small">Saisissez votre email. Vous recevrez un lien pour choisir un nouveau mot de passe.</p>
+        <label class="field"><span>Email</span><input type="email" name="email" required autocomplete="email"></label>
+        <button class="btn btn-block" type="submit">Envoyer le lien</button>
+      </div>
+      <div id="reset-update" class="hidden">
+        <p class="muted small">Choisissez un nouveau mot de passe d'au moins 8 caractères.</p>
+        <label class="field"><span>Nouveau mot de passe</span><input id="new-password" type="password" minlength="8" autocomplete="new-password"></label>
+        <label class="field"><span>Confirmer le mot de passe</span><input id="new-password-confirm" type="password" minlength="8" autocomplete="new-password"></label>
+        <button class="btn btn-block" type="button" id="update-password">Enregistrer le nouveau mot de passe</button>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm" id="reset-back">Retour à la connexion</button>
     </form>
 
     <form id="f-signup" class="panel hidden">
@@ -47,6 +64,7 @@
   if (!ok) return;
   const sb = App.sb;
   const invite = App.qs("invite");
+  const resetMode = App.qs("reset") === "1";
   let next = App.qs("next") || "";
   // On n'accepte qu'une page du site (jamais un lien externe).
   if (!/^(?:index|admin|organisateur|scan|mes-billets|partenaire|evenement|paiement)\.html(?:\?[\w=&%\-.]*)?$/i.test(next)) next = "";
@@ -55,12 +73,48 @@
     const login = which === "login";
     App.$("#f-login").classList.toggle("hidden", !login);
     App.$("#f-signup").classList.toggle("hidden", login);
+    App.$("#f-reset").classList.add("hidden");
     App.$("#t-login").setAttribute("aria-selected", login);
     App.$("#t-signup").setAttribute("aria-selected", !login);
   }
+  function showReset(update) {
+    App.$("#f-login").classList.add("hidden");
+    App.$("#f-signup").classList.add("hidden");
+    App.$("#f-reset").classList.remove("hidden");
+    App.$("#t-login").setAttribute("aria-selected", false);
+    App.$("#t-signup").setAttribute("aria-selected", false);
+    App.$("#reset-request").classList.toggle("hidden", !!update);
+    App.$("#reset-update").classList.toggle("hidden", !update);
+  }
   App.$("#t-login").onclick = () => tab("login");
   App.$("#t-signup").onclick = () => tab("signup");
+  App.$("#forgot-link").onclick = () => showReset(false);
+  App.$("#reset-back").onclick = () => tab("login");
   if (invite) { App.$("#invite-note").classList.remove("hidden"); tab("signup"); }
+
+  App.$("#f-reset").onsubmit = async (e) => {
+    e.preventDefault();
+    const email = new FormData(e.target).get("email").trim();
+    await App.run(e.target.querySelector('[type="submit"]'), async () => {
+      const { error } = await sb.auth.resetPasswordForEmail(email, {
+        redirectTo: new URL("reset-password.html", location.href).href
+      });
+      if (error) throw error;
+      App.$("#reset-request").innerHTML = "<h3>Vérifiez votre email</h3><p>Si un compte correspond à cette adresse, un lien de réinitialisation vient d'être envoyé. Vérifiez aussi les spams.</p>";
+    });
+  };
+
+  App.$("#update-password").onclick = (ev) => App.run(ev.currentTarget, async () => {
+    const password = App.$("#new-password").value;
+    const confirmation = App.$("#new-password-confirm").value;
+    if (password.length < 8) throw new Error("Le mot de passe doit contenir au moins 8 caractères.");
+    if (password !== confirmation) throw new Error("Les mots de passe ne correspondent pas.");
+    const { error } = await sb.auth.updateUser({ password });
+    if (error) throw error;
+    await sb.auth.signOut();
+    App.toast("Mot de passe modifié. Vous pouvez vous connecter.", "ok");
+    setTimeout(() => tab("login"), 500);
+  });
 
   // Après connexion : accepter l'invitation si besoin, puis rediriger selon le rôle.
   async function finish() {
@@ -78,11 +132,14 @@
   }
 
   if (me) {
+    if (resetMode) { showReset(true); return; }
     // Déjà connecté
     if (invite) { await App.run(null, finish); return; }
     App.go(next || App.homeFor(me.role));
     return;
   }
+
+  if (resetMode) showReset(true);
 
   App.$("#f-login").onsubmit = async (e) => {
     e.preventDefault();
@@ -107,9 +164,20 @@
       });
       if (error) throw error;
       if (!data.session) {
+        const email = f.get("email").trim();
+        const resend = document.createElement("button");
+        resend.type = "button";
+        resend.className = "btn btn-ghost";
+        resend.textContent = "Renvoyer l'email";
+        resend.onclick = (ev) => App.run(ev.currentTarget, async () => {
+          const result = await sb.auth.resend({ type: "signup", email, options: { emailRedirectTo: location.href } });
+          if (result.error) throw result.error;
+          App.toast("Email de confirmation renvoyé.", "ok");
+        });
         // La confirmation par email est activée dans Supabase.
         App.$("#f-signup").innerHTML = "<h2>Vérifiez votre email</h2><p>Nous vous avons envoyé un lien de confirmation. Cliquez dessus, puis revenez vous connecter" +
           (invite ? " avec le même lien d'invitation" : "") + ".</p>";
+        App.$("#f-signup").append(resend);
         return;
       }
       await finish();

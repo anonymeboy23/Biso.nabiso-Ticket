@@ -5,6 +5,7 @@
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
   full_name text not null default '',
+  phone text,
   role text not null default 'client'
     check (role in ('proprietaire', 'organisateur', 'personnel', 'client')),
   role_expires_at timestamptz,
@@ -13,12 +14,14 @@ create table if not exists public.profiles (
 
 alter table public.profiles
   add column if not exists role_expires_at timestamptz;
+alter table public.profiles
+  add column if not exists phone text;
 
 alter table public.profiles enable row level security;
 
 revoke all on public.profiles from anon, authenticated;
 grant select on public.profiles to authenticated;
-grant update (full_name) on public.profiles to authenticated;
+grant update (full_name, phone) on public.profiles to authenticated;
 
 drop policy if exists "Users can read their own profile" on public.profiles;
 create policy "Users can read their own profile"
@@ -36,6 +39,47 @@ create policy "Users can update their own profile"
 create unique index if not exists profiles_single_owner
   on public.profiles (role)
   where role = 'proprietaire';
+
+create table if not exists public.partner_requests (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  company_name text not null check (length(trim(company_name)) between 1 and 100),
+  message text,
+  status text not null default 'en_attente'
+    check (status in ('en_attente', 'approuvee', 'refusee')),
+  created_at timestamptz not null default now()
+);
+create index if not exists partner_requests_user_created on public.partner_requests (user_id, created_at desc);
+alter table public.partner_requests enable row level security;
+revoke all on public.partner_requests from anon, authenticated;
+grant select, insert on public.partner_requests to authenticated;
+grant update (status) on public.partner_requests to authenticated;
+drop policy if exists "Users can read their partner requests" on public.partner_requests;
+create policy "Users can read their partner requests" on public.partner_requests for select to authenticated
+  using (user_id = (select auth.uid()) or exists (select 1 from public.profiles where id = (select auth.uid()) and role = 'proprietaire'));
+drop policy if exists "Users can create partner requests" on public.partner_requests;
+create policy "Users can create partner requests" on public.partner_requests for insert to authenticated
+  with check (user_id = (select auth.uid()));
+drop policy if exists "Owner can update partner requests" on public.partner_requests;
+create policy "Owner can update partner requests" on public.partner_requests for update to authenticated
+  using (exists (select 1 from public.profiles where id = (select auth.uid()) and role = 'proprietaire'));
+
+create table if not exists public.settings (
+  key text primary key, value text not null default '', updated_at timestamptz not null default now()
+);
+insert into public.settings (key, value) values
+  ('public_test_mode', 'true'), ('public_receiver_mpesa', ''),
+  ('public_receiver_airtel', ''), ('public_receiver_orange', '')
+on conflict (key) do nothing;
+alter table public.settings enable row level security;
+revoke all on public.settings from anon, authenticated;
+grant select, insert, update on public.settings to authenticated;
+drop policy if exists "Authenticated users can read settings" on public.settings;
+create policy "Authenticated users can read settings" on public.settings for select to authenticated using (true);
+drop policy if exists "Owner can manage settings" on public.settings;
+create policy "Owner can manage settings" on public.settings for all to authenticated
+  using (exists (select 1 from public.profiles where id = (select auth.uid()) and role = 'proprietaire'))
+  with check (exists (select 1 from public.profiles where id = (select auth.uid()) and role = 'proprietaire'));
 
 create or replace function public.guard_profile_role()
 returns trigger
@@ -85,10 +129,11 @@ security definer
 set search_path = ''
 as $$
 begin
-  insert into public.profiles (id, full_name, role)
+  insert into public.profiles (id, full_name, phone, role)
   values (
     new.id,
     coalesce(nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''), ''),
+    nullif(trim(new.raw_user_meta_data ->> 'phone'), ''),
     'client'
   );
   return new;
@@ -99,6 +144,12 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.create_profile_for_new_user();
+
+update public.profiles p
+set phone = nullif(trim(u.raw_user_meta_data ->> 'phone'), '')
+from auth.users u
+where p.id = u.id and p.phone is null
+  and nullif(trim(u.raw_user_meta_data ->> 'phone'), '') is not null;
 
 create table if not exists public.events (
   id uuid primary key default gen_random_uuid(),
@@ -351,6 +402,29 @@ create table if not exists public.orders (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.payments (
+  id uuid primary key default gen_random_uuid(),
+  order_id uuid not null references public.orders (id) on delete cascade,
+  amount numeric(12, 2) not null check (amount > 0),
+  currency text not null check (currency in ('USD', 'CDF')),
+  method text not null check (method in ('mpesa', 'airtel', 'orange', 'test')),
+  network text, transfer_code text, phone text,
+  status text not null default 'en_attente' check (status in ('en_attente', 'a_verifier', 'reussi', 'echoue', 'expire')),
+  created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+create index if not exists payments_order_created on public.payments (order_id, created_at desc);
+create index if not exists payments_status_created on public.payments (status, created_at desc);
+
+create table if not exists public.incoming_transactions (
+  id uuid primary key default gen_random_uuid(),
+  network text not null check (network in ('mpesa', 'airtel', 'orange')),
+  transfer_code text not null, amount numeric(12, 2) not null check (amount > 0),
+  currency text not null check (currency in ('USD', 'CDF')),
+  received_at timestamptz not null default now(), used boolean not null default false,
+  used_at timestamptz, unique (network, transfer_code)
+);
+create index if not exists incoming_transactions_received on public.incoming_transactions (received_at desc);
+
 create table if not exists public.order_lines (
   id uuid primary key default gen_random_uuid(),
   order_id uuid not null references public.orders (id) on delete cascade,
@@ -411,6 +485,8 @@ create index if not exists tickets_owner_created on public.tickets (owner_id, cr
 create index if not exists tickets_event_status on public.tickets (event_id, status);
 
 alter table public.orders enable row level security;
+alter table public.payments enable row level security;
+alter table public.incoming_transactions enable row level security;
 alter table public.order_lines enable row level security;
 alter table public.tickets enable row level security;
 alter table public.staff_assignments enable row level security;
@@ -418,6 +494,19 @@ alter table public.incidents enable row level security;
 
 revoke all on public.orders, public.order_lines, public.tickets, public.staff_assignments, public.incidents from anon, authenticated;
 grant select on public.orders, public.order_lines, public.tickets, public.staff_assignments, public.incidents to authenticated;
+revoke all on public.payments, public.incoming_transactions from anon, authenticated;
+grant select on public.payments to authenticated;
+grant select, insert on public.incoming_transactions to authenticated;
+drop policy if exists "Users and owner can read payments" on public.payments;
+create policy "Users and owner can read payments" on public.payments for select to authenticated using (exists (
+  select 1 from public.orders o where o.id = order_id and (o.user_id = (select auth.uid()) or exists (
+    select 1 from public.profiles where id = (select auth.uid()) and role = 'proprietaire'))));
+drop policy if exists "Owner can read incoming transactions" on public.incoming_transactions;
+create policy "Owner can read incoming transactions" on public.incoming_transactions for select to authenticated using (exists (
+  select 1 from public.profiles where id = (select auth.uid()) and role = 'proprietaire'));
+drop policy if exists "Owner can insert incoming transactions" on public.incoming_transactions;
+create policy "Owner can insert incoming transactions" on public.incoming_transactions for insert to authenticated with check (exists (
+  select 1 from public.profiles where id = (select auth.uid()) and role = 'proprietaire'));
 
 drop policy if exists "Buyers can read their orders" on public.orders;
 create policy "Buyers can read their orders"
@@ -493,7 +582,8 @@ create policy "Event owners can read incident reports"
       )
   ));
 
-create or replace function public.assign_staff(p_email text, p_event_id uuid, p_gate text)
+drop function if exists public.assign_staff(text, uuid, text);
+create function public.assign_staff(p_email text, p_event_id uuid, p_gate text)
 returns uuid
 language plpgsql
 security definer
@@ -527,7 +617,8 @@ begin
 end;
 $$;
 
-create or replace function public.list_staff(p_event_id uuid)
+drop function if exists public.list_staff(uuid);
+create function public.list_staff(p_event_id uuid)
 returns table (id uuid, full_name text, email text, gate text)
 language plpgsql
 security definer
@@ -711,6 +802,88 @@ begin
 end;
 $$;
 
+drop function if exists public.settle_payment(uuid);
+create function public.settle_payment(p_payment_id uuid) returns void language plpgsql security definer set search_path = '' as $$
+declare v_payment public.payments%rowtype; v_order public.orders%rowtype;
+begin
+  select * into v_payment from public.payments where id = p_payment_id for update;
+  if not found then raise exception 'Paiement introuvable'; end if;
+  select * into v_order from public.orders where id = v_payment.order_id for update;
+  if not found then raise exception 'Commande introuvable'; end if;
+  if v_order.status = 'paye' then update public.payments set status = 'reussi', updated_at = now() where id = p_payment_id; return; end if;
+  if v_order.status <> 'en_attente' or v_order.expires_at <= now() then raise exception 'Cette commande a expiré'; end if;
+  update public.orders set status = 'paye' where id = v_order.id;
+  update public.tickets set status = 'valide' where order_id = v_order.id and status = 'en_attente_paiement';
+  update public.ticket_lots l set held = l.held - sold.amount, sold = l.sold + sold.amount
+  from (select lot_id, count(*)::integer amount from public.order_lines where order_id = v_order.id group by lot_id) sold where l.id = sold.lot_id;
+  update public.payments set status = 'reussi', updated_at = now() where id = p_payment_id;
+end; $$;
+
+drop function if exists public.start_payment(uuid, text, text);
+create function public.start_payment(p_order_id uuid, p_method text, p_phone text default null) returns uuid language plpgsql security definer set search_path = '' as $$
+declare v_order public.orders%rowtype; v_id uuid;
+begin
+  perform public.expire_pending_orders();
+  select * into v_order from public.orders where id = p_order_id and user_id = auth.uid() for update;
+  if not found or v_order.status <> 'en_attente' or v_order.expires_at <= now() then raise exception 'Cette commande a expiré ou n’est plus disponible'; end if;
+  if p_method is null or p_method not in ('mpesa','airtel','orange','test') then raise exception 'Moyen de paiement invalide'; end if;
+  insert into public.payments(order_id,amount,currency,method,network,phone) values(v_order.id,v_order.total,v_order.currency,p_method,nullif(p_method,'test'),nullif(trim(coalesce(p_phone,'')),'')) returning id into v_id;
+  return v_id;
+end; $$;
+
+drop function if exists public.submit_transfer_code(uuid, text, text, text);
+create function public.submit_transfer_code(p_order_id uuid, p_network text, p_code text, p_phone text default null) returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_order public.orders%rowtype; v_id uuid; v_tx public.incoming_transactions%rowtype;
+begin
+  perform public.expire_pending_orders();
+  select * into v_order from public.orders where id = p_order_id and user_id = auth.uid() for update;
+  if not found then raise exception 'Commande introuvable'; end if;
+  if v_order.status <> 'en_attente' or v_order.expires_at <= now() then return jsonb_build_object('status','remboursement'); end if;
+  if p_network not in ('mpesa','airtel','orange') or length(trim(coalesce(p_code,''))) < 3 or length(trim(p_code)) > 40 then raise exception 'Code de transfert invalide'; end if;
+  insert into public.payments(order_id,amount,currency,method,network,transfer_code,phone,status) values(v_order.id,v_order.total,v_order.currency,p_network,p_network,trim(p_code),nullif(trim(coalesce(p_phone,'')),''),'a_verifier') returning id into v_id;
+  select * into v_tx from public.incoming_transactions where network=p_network and transfer_code=trim(p_code) and amount=v_order.total and currency=v_order.currency and not used for update;
+  if found then update public.incoming_transactions set used=true,used_at=now() where id=v_tx.id; perform public.settle_payment(v_id); return jsonb_build_object('payment_id',v_id,'status','confirme'); end if;
+  return jsonb_build_object('payment_id',v_id,'status','a_verifier');
+end; $$;
+
+drop function if exists public.simulate_payment_success(uuid);
+create function public.simulate_payment_success(p_payment_id uuid) returns void language plpgsql security definer set search_path = '' as $$
+declare v public.payments%rowtype;
+begin
+  select p.* into v from public.payments p join public.orders o on o.id=p.order_id where p.id=p_payment_id and (o.user_id=auth.uid() or exists(select 1 from public.profiles where id=auth.uid() and role='proprietaire')) for update;
+  if not found or v.method <> 'test' then raise exception 'Paiement de test introuvable'; end if;
+  perform public.settle_payment(p_payment_id);
+end; $$;
+
+drop function if exists public.approve_code_payment(uuid);
+create function public.approve_code_payment(p_payment_id uuid) returns void language plpgsql security definer set search_path = '' as $$
+declare v public.payments%rowtype;
+begin
+  if not exists(select 1 from public.profiles where id=auth.uid() and role='proprietaire') then raise exception 'Accès réservé au propriétaire'; end if;
+  select * into v from public.payments where id=p_payment_id for update;
+  if not found or v.status <> 'a_verifier' then raise exception 'Ce paiement n’est plus à vérifier'; end if;
+  update public.incoming_transactions set used=true,used_at=now() where network=v.network and transfer_code=v.transfer_code and amount=v.amount and currency=v.currency and not used;
+  perform public.settle_payment(p_payment_id);
+end; $$;
+
+drop function if exists public.reject_code_payment(uuid);
+create function public.reject_code_payment(p_payment_id uuid) returns void language plpgsql security definer set search_path = '' as $$
+begin
+  if not exists(select 1 from public.profiles where id=auth.uid() and role='proprietaire') then raise exception 'Accès réservé au propriétaire'; end if;
+  update public.payments set status='echoue',updated_at=now() where id=p_payment_id and status='a_verifier';
+  if not found then raise exception 'Ce paiement n’est plus à vérifier'; end if;
+end; $$;
+
+create or replace function public.match_incoming_transaction() returns trigger language plpgsql security definer set search_path = '' as $$
+declare v_id uuid;
+begin
+  select p.id into v_id from public.payments p join public.orders o on o.id=p.order_id where p.status='a_verifier' and p.network=new.network and p.transfer_code=new.transfer_code and p.amount=new.amount and p.currency=new.currency and o.status='en_attente' and o.expires_at>now() order by p.created_at limit 1;
+  if v_id is not null then update public.incoming_transactions set used=true,used_at=now() where id=new.id; perform public.settle_payment(v_id); end if;
+  return new;
+end; $$;
+drop trigger if exists match_incoming_transaction on public.incoming_transactions;
+create trigger match_incoming_transaction after insert on public.incoming_transactions for each row execute function public.match_incoming_transaction();
+
 create or replace function public.confirm_order_payment(p_order_id uuid)
 returns void
 language plpgsql
@@ -739,7 +912,8 @@ begin
 end;
 $$;
 
-create or replace function public.scan_ticket(
+drop function if exists public.scan_ticket(uuid, text, text, uuid);
+create function public.scan_ticket(
   p_event_id uuid, p_gate text, p_code text default null, p_ticket_id uuid default null
 )
 returns jsonb
@@ -792,7 +966,8 @@ begin
 end;
 $$;
 
-create or replace function public.confirm_entry(p_ticket_id uuid, p_gate text)
+drop function if exists public.confirm_entry(uuid, text);
+create function public.confirm_entry(p_ticket_id uuid, p_gate text)
 returns jsonb
 language plpgsql
 security definer
@@ -824,7 +999,8 @@ begin
 end;
 $$;
 
-create or replace function public.entry_counts(p_event_id uuid)
+drop function if exists public.entry_counts(uuid);
+create function public.entry_counts(p_event_id uuid)
 returns jsonb
 language plpgsql
 security definer
@@ -969,6 +1145,13 @@ end;
 $$;
 
 revoke all on function public.expire_pending_orders() from public, anon, authenticated;
+revoke all on function public.settle_payment(uuid) from public, anon, authenticated;
+revoke all on function public.start_payment(uuid, text, text) from public, anon;
+revoke all on function public.submit_transfer_code(uuid, text, text, text) from public, anon;
+revoke all on function public.simulate_payment_success(uuid) from public, anon;
+revoke all on function public.approve_code_payment(uuid) from public, anon;
+revoke all on function public.reject_code_payment(uuid) from public, anon;
+revoke all on function public.match_incoming_transaction() from public, anon, authenticated;
 revoke all on function public.create_order(uuid, jsonb) from public, anon;
 revoke all on function public.confirm_order_payment(uuid) from public, anon;
 revoke all on function public.scan_ticket(uuid, text, text, uuid) from public, anon;
@@ -982,6 +1165,8 @@ revoke all on function public.assign_staff(text, uuid, text) from public, anon;
 revoke all on function public.list_staff(uuid) from public, anon;
 revoke all on function public.remove_staff(uuid) from public, anon;
 grant execute on function public.create_order(uuid, jsonb),
+  public.start_payment(uuid, text, text), public.submit_transfer_code(uuid, text, text, text),
+  public.simulate_payment_success(uuid), public.approve_code_payment(uuid), public.reject_code_payment(uuid),
   public.confirm_order_payment(uuid), public.scan_ticket(uuid, text, text, uuid),
   public.confirm_entry(uuid, text), public.entry_counts(uuid),
   public.search_tickets(uuid, text), public.report_not_holder(uuid, text),
@@ -1080,3 +1265,11 @@ create policy "Ticket buyers can remove their own photos"
 -- set role = 'organisateur', role_expires_at = now() + interval '90 days'
 -- from auth.users u
 -- where p.id = u.id and lower(u.email) = lower('organisateur@example.com');
+--
+-- Pour les essais du personnel, le propriétaire peut promouvoir un compte
+-- déjà créé et confirmé, en remplaçant l'adresse :
+-- update public.profiles p
+-- set role = 'personnel'
+-- from auth.users u
+-- where p.id = u.id and lower(u.email) = lower('personnel@example.com');
+

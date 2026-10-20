@@ -69,7 +69,7 @@
     [/invalid login credentials/i, "Email ou mot de passe incorrect."],
     [/user already registered/i, "Un compte existe déjà avec cet email. Connectez-vous."],
     [/email not confirmed/i, "Confirmez d'abord votre email (regardez votre boîte de réception)."],
-    [/password should be at least/i, "Le mot de passe doit contenir au moins 6 caractères."],
+    [/password should be at least/i, "Le mot de passe doit contenir au moins 8 caractères."],
     [/failed to fetch|networkerror|load failed/i, "Connexion impossible. Vérifiez votre réseau et réessayez."],
     [/row-level security|permission denied/i, "Vous n'avez pas le droit de faire cette action."],
     [/duplicate key/i, "Cet élément existe déjà."],
@@ -121,10 +121,11 @@
   App.me = async (force) => {
     if (App._me !== undefined && !force) return App._me;
     if (!sb) return (App._me = null);
-    const { data: { session } } = await sb.auth.getSession();
+    const { data: { session }, error: sessionError } = await sb.auth.getSession();
+    if (sessionError) throw sessionError;
     if (!session) return (App._me = null);
     const { data, error } = await sb.from("profiles").select("*").eq("id", session.user.id).maybeSingle();
-    if (error) console.error(error);
+    if (error) throw error;
     App._me = data || null;
     return App._me;
   };
@@ -142,6 +143,7 @@
     let items = a("index.html", "Événements", "home");
     if (me) {
       items += a("mes-billets.html", "Mes billets", "tickets");
+      items += a("aide.html", "Guide", "guide");
       if (me.role === "client") items += a("partenaire.html", "Devenir partenaire", "partner");
       if (me.role === "organisateur") items += a("organisateur.html", "Espace organisateur", "org");
       if (me.role === "personnel" || me.role === "proprietaire") items += a("scan.html", "Scanner", "scan");
@@ -149,7 +151,7 @@
       const first = (me.full_name || "").split(" ")[0] || "compte";
       items += `<button type="button" id="logout-btn">Se déconnecter (${App.esc(first)})</button>`;
     } else {
-      items += a("partenaire.html", "Devenir partenaire", "partner") + a("connexion.html", "Connexion", "login");
+      items += a("aide.html", "Guide", "guide") + a("partenaire.html", "Devenir partenaire", "partner") + a("connexion.html", "Connexion", "login");
     }
     el.innerHTML = `<header class="topbar"><div class="wrap">
       <a class="logo" href="index.html">${LOGO}<span>${App.esc(cfg.APP_NAME || "Biso.nabiso-Ticket")}</span></a>
@@ -185,7 +187,13 @@
       return { ok: false, me: null };
     }
     let me = null;
-    try { me = await App.me(); } catch (e) { App.error(e); }
+    try {
+      me = await App.me();
+    } catch (e) {
+      App.error(e);
+      App.showBlock("<h2>Impossible de vérifier votre compte</h2><p>La session est peut-être valide, mais le profil client est inaccessible. Vérifiez que le script <b>database/schema.sql</b> a été exécuté dans Supabase et que la connexion fonctionne, puis rechargez la page.</p>");
+      return { ok: false, me: null };
+    }
     App.renderNav(active, me);
     if (roles && me && me.role === "organisateur" && me.role_expires_at &&
         Date.parse(me.role_expires_at) <= Date.now()) {
