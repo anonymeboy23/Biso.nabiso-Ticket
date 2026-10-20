@@ -124,13 +124,19 @@
           <button class="btn btn-ghost btn-sm" data-act="stats" data-id="${esc(ev.id)}">Afficher les statistiques</button>
           <div data-stats="${esc(ev.id)}" style="margin-top:12px"></div>` : ""}
 
-        ${ctx.staff ? `<h3 style="margin-top:24px">Personnel de contrôle</h3>
+        ${ctx.staff ? `<div class="panel" style="margin-top:24px">
+          <h3>Affecter un scanneur à cette activité</h3>
+          <p class="muted small">Le scanneur se connectera avec son compte, puis verra uniquement cette activité dans son espace de scan.</p>
+          <form class="inline" data-form="add-staff" data-id="${esc(ev.id)}">
+            <label class="field" style="flex:2;min-width:220px"><span>E-mail du scanneur</span>
+              <input name="email" type="email" required placeholder="scanneur@example.com"></label>
+            <label class="field" style="flex:1;min-width:140px"><span>Porte</span>
+              <input name="gate" placeholder="Porte 1" value="Porte 1"></label>
+            <button class="btn btn-sm" type="submit">Affecter le scanneur</button>
+          </form>
+          <p class="muted small">Le compte doit d'abord être créé et avoir le rôle « personnel » dans Supabase.</p>
           <div data-staff="${esc(ev.id)}" class="muted small">Chargement…</div>
-          <form class="inline" data-form="add-staff" data-id="${esc(ev.id)}" style="margin-top:10px">
-            <input name="email" type="email" required placeholder="Email du membre du personnel" style="flex:2;min-width:200px">
-            <input name="gate" placeholder="Porte (ex. Porte 1)" style="flex:1;min-width:120px">
-            <button class="btn btn-sm" type="submit">Affecter</button></form>
-          <p class="muted small">La personne doit créer un compte et recevoir le rôle « personnel » avant son affectation.</p>` : ""}
+        </div>` : ""}
       </div>`;
     }
 

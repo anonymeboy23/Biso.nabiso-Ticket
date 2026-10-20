@@ -1,0 +1,10 @@
+.git/
+.git/**
+.agents/
+.codex/
+.aws/
+.wrangler/
+database/
+database/**
+wrangler.jsonc
+.gitignore
