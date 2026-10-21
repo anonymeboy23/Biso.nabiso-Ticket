@@ -155,7 +155,7 @@ begin
   end if;
 
   return query
-    select p.id, p.full_name, u.email, p.role
+    select p.id, p.full_name::text, u.email::text, p.role::text
     from public.profiles p
     join auth.users u on u.id = p.id
     where lower(u.email) = lower(trim(coalesce(p_email, '')));
