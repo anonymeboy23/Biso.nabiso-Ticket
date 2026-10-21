@@ -98,6 +98,11 @@ begin
     end if;
 
     if auth.uid() is not null
+       and not exists (
+         select 1 from public.profiles owner_profile
+         where owner_profile.id = auth.uid()
+           and owner_profile.role = 'proprietaire'
+       )
        and coalesce(current_setting('app.allow_role_management', true), '') <> 'on' then
       raise exception 'Profile roles cannot be changed by an authenticated user';
     end if;
