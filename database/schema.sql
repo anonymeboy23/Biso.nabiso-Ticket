@@ -37,9 +37,7 @@ create policy "Users can update their own profile"
   using (id = (select auth.uid()))
   with check (id = (select auth.uid()));
 
-create unique index if not exists profiles_single_owner
-  on public.profiles (role)
-  where role = 'proprietaire';
+drop index if exists public.profiles_single_owner;
 
 create table if not exists public.partner_requests (
   id uuid primary key default gen_random_uuid(),
@@ -165,6 +163,56 @@ end;
 $$;
 revoke all on function public.set_staff_role(text, text) from public;
 grant execute on function public.set_staff_role(text, text) to authenticated;
+
+-- Gestion de plusieurs administrateurs. Le rôle interne reste proprietaire
+-- afin de conserver les mêmes droits dans les règles RLS existantes.
+drop function if exists public.list_admins();
+create function public.list_admins()
+returns table (id uuid, full_name text, email text, created_at timestamptz)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'proprietaire') then
+    raise exception 'Accès réservé aux administrateurs';
+  end if;
+  return query
+    select p.id, p.full_name, u.email, u.created_at
+    from public.profiles p join auth.users u on u.id = p.id
+    where p.role = 'proprietaire' order by u.created_at;
+end;
+$$;
+revoke all on function public.list_admins() from public;
+grant execute on function public.list_admins() to authenticated;
+
+drop function if exists public.set_admin_role(text, boolean);
+create function public.set_admin_role(p_email text, p_is_admin boolean)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_target uuid;
+  v_admin_count integer;
+begin
+  if not exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'proprietaire') then
+    raise exception 'Accès réservé aux administrateurs';
+  end if;
+  select p.id into v_target
+  from public.profiles p join auth.users u on u.id = p.id
+  where lower(u.email) = lower(trim(coalesce(p_email, '')));
+  if v_target is null then raise exception 'Aucun compte trouvé pour cet email'; end if;
+  if not p_is_admin and v_target = auth.uid() then raise exception 'Vous ne pouvez pas retirer votre propre accès'; end if;
+  select count(*) into v_admin_count from public.profiles where role = 'proprietaire';
+  if not p_is_admin and v_admin_count <= 1 then raise exception 'Il faut conserver au moins un administrateur'; end if;
+  perform set_config('app.allow_role_management', 'on', true);
+  update public.profiles set role = case when p_is_admin then 'proprietaire' else 'client' end where id = v_target;
+end;
+$$;
+revoke all on function public.set_admin_role(text, boolean) from public;
+grant execute on function public.set_admin_role(text, boolean) to authenticated;
 
 -- Les rôles sont gérés uniquement par set_staff_role.
 -- Les utilisateurs authentifiés n'ont pas le privilège UPDATE sur la colonne role.

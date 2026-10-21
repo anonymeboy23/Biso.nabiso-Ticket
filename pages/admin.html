@@ -268,7 +268,11 @@
 
   /* ---------- Réglages ---------- */
   async function settings() {
-    const st = Object.fromEntries((await App.q(sb.from("settings").select("key,value"))).map((r) => [r.key, r.value]));
+    const [settingsRows, admins] = await Promise.all([
+      App.q(sb.from("settings").select("key,value")),
+      App.rpc("list_admins")
+    ]);
+    const st = Object.fromEntries(settingsRows.map((r) => [r.key, r.value]));
     view.innerHTML = `<form class="panel" id="sf"><h3>Paiements</h3>
         <label class="inline" style="margin-bottom:14px"><input type="checkbox" name="test" style="width:auto" ${st.public_test_mode === "true" ? "checked" : ""}>
           <span><b>Mode test</b> : permet de simuler un paiement sans argent. À désactiver avant le lancement réel.</span></label>
@@ -279,7 +283,17 @@
           <label class="field"><span>Orange Money</span><input name="orange" value="${esc(st.public_receiver_orange || "")}"></label></div>
         <button class="btn" type="submit">Enregistrer</button></form>
       <div class="panel"><h3>Votre compte</h3>
-        <p style="margin:0">Vous êtes le <b>propriétaire</b> du site (${esc(me.email || "")}). Ce rôle est unique, permanent et ne peut être retiré par personne.</p></div>`;
+        <p style="margin:0">Vous êtes administrateur du site (${esc(me.email || "")}).</p></div>
+      <div class="panel"><h3>Administrateurs</h3>
+        <p class="muted small">Ajoutez un compte déjà créé, ou retirez l'accès administrateur sans supprimer son compte.</p>
+        <form id="adminRoleForm" class="inline" style="margin-bottom:14px">
+          <input name="email" type="email" required placeholder="E-mail du compte" style="flex:2;min-width:240px">
+          <select name="action" style="width:auto"><option value="add">Ajouter administrateur</option><option value="remove">Retirer administrateur</option></select>
+          <button class="btn btn-sm" type="submit">Appliquer</button>
+        </form>
+        ${admins.length ? `<div class="table-wrap"><table><thead><tr><th>Nom</th><th>E-mail</th><th>Créé le</th></tr></thead><tbody>
+          ${admins.map((a) => `<tr><td>${esc(a.full_name || "")}</td><td>${esc(a.email)}</td><td>${esc(App.fmtShort(a.created_at))}</td></tr>`).join("")}
+        </tbody></table></div>` : '<p class="muted">Aucun administrateur trouvé.</p>'}</div>`;
     $("#sf").onsubmit = async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
@@ -293,6 +307,15 @@
           { key: "public_receiver_airtel", value: f.get("airtel").trim() },
           { key: "public_receiver_orange", value: f.get("orange").trim() }]));
         App.toast("Réglages enregistrés.", "ok");
+      });
+    };
+    $("#adminRoleForm").onsubmit = async (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      await App.run(e.target.querySelector('[type="submit"]'), async () => {
+        await App.rpc("set_admin_role", { p_email: f.get("email").trim(), p_is_admin: f.get("action") === "add" });
+        App.toast(f.get("action") === "add" ? "Administrateur ajouté." : "Accès administrateur retiré.", "ok");
+        await settings();
       });
     };
   }
