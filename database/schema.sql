@@ -129,8 +129,8 @@ set search_path = ''
 as $$
 begin
   if not exists (
-    select 1 from public.profiles
-    where id = auth.uid() and role = 'proprietaire'
+    select 1 from public.profiles owner_profile
+    where owner_profile.id = auth.uid() and owner_profile.role = 'proprietaire'
   ) then
     raise exception 'Accès réservé au propriétaire';
   end if;
