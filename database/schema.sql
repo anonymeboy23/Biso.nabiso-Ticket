@@ -22,6 +22,7 @@ alter table public.profiles enable row level security;
 revoke all on public.profiles from anon, authenticated;
 grant select on public.profiles to authenticated;
 grant update (full_name, phone) on public.profiles to authenticated;
+revoke update (role) on public.profiles from anon, authenticated;
 
 drop policy if exists "Users can read their own profile" on public.profiles;
 create policy "Users can read their own profile"
@@ -165,10 +166,9 @@ $$;
 revoke all on function public.set_staff_role(text, text) from public;
 grant execute on function public.set_staff_role(text, text) to authenticated;
 
+-- Les rôles sont gérés uniquement par set_staff_role.
+-- Les utilisateurs authentifiés n'ont pas le privilège UPDATE sur la colonne role.
 drop trigger if exists guard_profile_role on public.profiles;
-create trigger guard_profile_role
-  before update of role or delete on public.profiles
-  for each row execute function public.guard_profile_role();
 
 create or replace function public.create_profile_for_new_user()
 returns trigger
