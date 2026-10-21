@@ -155,7 +155,7 @@
     let items = a("index.html", "Événements", "home");
     if (me) {
       items += a("mes-billets.html", "Mes billets", "tickets");
-      items += a("aide.html", "Guide", "guide");
+      items += a("aide.html", "Guide", "guide") + a("contact.html", "Contact", "contact") + a("legal.html", "Infos légales", "legal");
       if (me.role === "client") items += a("partenaire.html", "Devenir partenaire", "partner");
       if (me.role === "organisateur") items += a("organisateur.html", "Espace organisateur", "org");
       if (me.role === "personnel" || me.role === "proprietaire") items += a("scan.html", "Scanner", "scan");
@@ -163,7 +163,7 @@
       const first = (me.full_name || "").split(" ")[0] || "compte";
       items += `<button type="button" id="logout-btn">Se déconnecter (${App.esc(first)})</button>`;
     } else {
-      items += a("aide.html", "Guide", "guide") + a("partenaire.html", "Devenir partenaire", "partner") + a("connexion.html", "Connexion", "login");
+      items += a("aide.html", "Guide", "guide") + a("contact.html", "Contact", "contact") + a("legal.html", "Infos légales", "legal") + a("partenaire.html", "Devenir partenaire", "partner") + a("connexion.html", "Connexion", "login");
     }
     el.innerHTML = `<header class="topbar"><div class="wrap">
       <a class="logo" href="index.html">${LOGO}<span>${App.esc(cfg.APP_NAME || "Biso.nabiso-Ticket")}</span></a>
