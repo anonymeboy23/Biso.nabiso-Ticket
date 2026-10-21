@@ -34,7 +34,7 @@
   const view = $("#view");
 
   const TABS = [["overview", "Vue d'ensemble"], ["events", "Événements"], ["partners", "Partenaires"],
-    ["payments", "Paiements"], ["incidents", "Incidents"], ["payouts", "Reversements"],
+    ["payments", "Paiements"], ["exports", "Exports"], ["incidents", "Incidents"], ["payouts", "Reversements"],
     ["journal", "Journal"], ["settings", "Réglages"]];
   $("#tabs").innerHTML = TABS.map(([k, l]) => `<button type="button" role="tab" data-tab="${k}" aria-selected="false">${l}</button>`).join("");
   $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (b) location.hash = b.dataset.tab; };
@@ -225,6 +225,23 @@
   }
 
   /* ---------- Incidents ---------- */
+  async function exportsView() {
+    const rows = await App.rpc("owner_export_tickets");
+    const csv = (items) => items.map((row) => Object.values(row).map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(";")).join("\n");
+    const download = (name) => {
+      const headers = ["Événement", "Code billet", "Détenteur", "Acheteur", "Montant", "Devise", "Statut", "Scanné le", "Porte", "Créé le"];
+      const body = rows.map((r) => [r.event_title, r.ticket_code, r.holder_name, r.buyer_name, r.amount, r.currency, r.ticket_status, r.scanned_at, r.scanned_gate, r.created_at]);
+      const blob = new Blob(["\ufeff" + headers.map((h) => `"${h}"`).join(";") + "\n" + csv(body)], { type: "text/csv;charset=utf-8" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; a.click(); URL.revokeObjectURL(a.href);
+    };
+    view.innerHTML = `<div class="panel"><h3>Exporter les billets et les ventes</h3>
+      <p class="muted small">Téléchargez un fichier CSV ouvrable dans Excel ou Google Sheets.</p>
+      <button class="btn" id="export-tickets">Télécharger les billets (${rows.length})</button></div>
+      <div class="panel"><h3>Résumé</h3><p>${rows.filter((r) => r.ticket_status === "valide").length} billet(s) valide(s), ${rows.filter((r) => r.ticket_status === "utilise").length} entrée(s) enregistrée(s).</p></div>`;
+    $("#export-tickets").onclick = () => download("biso-billets.csv");
+  }
+
+  /* ---------- Incidents ---------- */
   async function incidents() {
     view.innerHTML = `<p class="muted">Une personne se présente avec le billet d'un autre. Contactez le détenteur pour confirmer, puis décidez.</p><div id="inc"></div>`;
     await EventsManager.mountIncidents($("#inc"));
@@ -321,7 +338,7 @@
   }
 
   /* ---------- Navigation par onglets ---------- */
-  const VIEWS = { overview, events, partners, payments, incidents, payouts, journal, settings };
+  const VIEWS = { overview, events, partners, payments, exports: exportsView, incidents, payouts, journal, settings };
   async function show() {
     let k = location.hash.replace("#", "");
     if (!VIEWS[k]) k = "events";

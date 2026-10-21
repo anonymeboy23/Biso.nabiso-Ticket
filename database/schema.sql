@@ -214,6 +214,43 @@ $$;
 revoke all on function public.set_admin_role(text, boolean) from public;
 grant execute on function public.set_admin_role(text, boolean) to authenticated;
 
+drop function if exists public.owner_export_tickets();
+create function public.owner_export_tickets()
+returns table (
+  event_title text,
+  ticket_code text,
+  holder_name text,
+  buyer_name text,
+  amount numeric,
+  currency text,
+  ticket_status text,
+  scanned_at timestamptz,
+  scanned_gate text,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (select 1 from public.profiles p where p.id = auth.uid() and p.role = 'proprietaire') then
+    raise exception 'Accès réservé aux administrateurs';
+  end if;
+  return query
+    select e.title::text, t.code::text, t.holder_name::text,
+      buyer.full_name::text, ol.unit_price, o.currency::text, t.status::text,
+      t.scanned_at, t.scanned_gate::text, t.created_at
+    from public.tickets t
+    join public.events e on e.id = t.event_id
+    join public.order_lines ol on ol.id = t.order_line_id
+    join public.orders o on o.id = t.order_id
+    left join public.profiles buyer on buyer.id = o.user_id
+    order by t.created_at desc;
+end;
+$$;
+revoke all on function public.owner_export_tickets() from public;
+grant execute on function public.owner_export_tickets() to authenticated;
+
 -- Les rôles sont gérés uniquement par set_staff_role.
 -- Les utilisateurs authentifiés n'ont pas le privilège UPDATE sur la colonne role.
 drop trigger if exists guard_profile_role on public.profiles;
