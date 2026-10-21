@@ -159,7 +159,7 @@
         email: f.get("email").trim(), password: f.get("password"),
         options: {
           data: { full_name: f.get("full_name").trim(), phone: f.get("phone").trim() },
-          emailRedirectTo: location.href
+          emailRedirectTo: new URL("confirmation.html", location.href).href
         },
       });
       if (error) throw error;
@@ -170,7 +170,8 @@
         resend.className = "btn btn-ghost";
         resend.textContent = "Renvoyer l'email";
         resend.onclick = (ev) => App.run(ev.currentTarget, async () => {
-          const result = await sb.auth.resend({ type: "signup", email, options: { emailRedirectTo: location.href } });
+          const result = await sb.auth.resend({ type: "signup", email,
+            options: { emailRedirectTo: new URL("confirmation.html", location.href).href } });
           if (result.error) throw result.error;
           App.toast("Email de confirmation renvoyé.", "ok");
         });

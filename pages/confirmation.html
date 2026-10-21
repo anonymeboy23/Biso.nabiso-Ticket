@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compte confirmé · Biso.nabiso-Ticket</title>
+<link rel="stylesheet" href="../styles/style.css">
+</head>
+<body>
+<div id="nav"></div>
+<main id="main">
+  <div class="wrap page" style="max-width:620px">
+    <div class="panel center">
+      <h1>Compte confirmé</h1>
+      <p>Votre adresse e-mail a été confirmée avec succès.</p>
+      <p class="muted">Vous pouvez maintenant vous connecter avec votre adresse e-mail et votre mot de passe.</p>
+      <div class="inline" style="justify-content:center;margin-top:20px">
+        <a class="btn" id="login" href="connexion.html">Se connecter</a>
+        <a class="btn btn-ghost" href="index.html">Voir les événements</a>
+      </div>
+    </div>
+  </div>
+</main>
+<script src="../scripts/config.js"></script>
+<script src="../scripts/app.js"></script>
+<script>
+  App.renderNav("login", null);
+  const next = new URLSearchParams(location.search).get("next");
+  if (next) document.querySelector("#login").href = "connexion.html?next=" + encodeURIComponent(next);
+</script>
+</body>
+</html>
