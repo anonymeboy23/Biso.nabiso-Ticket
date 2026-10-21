@@ -178,7 +178,7 @@ begin
     raise exception 'Accès réservé aux administrateurs';
   end if;
   return query
-    select p.id, p.full_name, u.email, u.created_at
+    select p.id, p.full_name::text, u.email::text, u.created_at::timestamptz
     from public.profiles p join auth.users u on u.id = p.id
     where p.role = 'proprietaire' order by u.created_at;
 end;
