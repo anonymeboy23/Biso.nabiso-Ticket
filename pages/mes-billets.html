@@ -37,6 +37,25 @@
     utilise: ["Utilisé", ""], annule: ["Annulé", "bad"], bloque: ["Bloqué", "bad"],
   };
   let announced = false;
+  let ticketById = {};
+
+  function printTicket(t) {
+    const popup = window.open("", "_blank", "width=760,height=900");
+    if (!popup) { App.toast("Autorisez les fenêtres pop-up pour télécharger le billet.", "error"); return; }
+    const qr = document.createElement("div");
+    new QRCode(qr, { text: t.code, width: 240, height: 240, correctLevel: QRCode.CorrectLevel.M });
+    const canvas = qr.querySelector("canvas");
+    const ev = t.events || {};
+    const lot = t.ticket_lots || {};
+    popup.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Billet - ${esc(ev.title || "Biso.nabiso-Ticket")}</title>
+      <style>body{font-family:Arial,sans-serif;max-width:650px;margin:30px auto;color:#111827}header{border-bottom:3px solid #ffc83d;padding-bottom:15px}h1{margin:0 0 6px}h2{margin-top:28px}.ticket{border:1px solid #d1d5db;border-radius:16px;padding:24px;margin-top:24px}.qr{text-align:center;margin:24px}.qr img{width:240px;height:240px}.muted{color:#6b7280}.status{font-weight:bold;color:#087f5b}@media print{button{display:none}}</style></head><body>
+      <header><h1>Biso.nabiso-Ticket</h1><div class="muted">Billet électronique</div></header><section class="ticket"><h2>${esc(ev.title || "Événement")}</h2>
+      <p class="muted">${esc(App.fmtDate(ev.starts_at))}<br>${esc([ev.venue, ev.city].filter(Boolean).join(", "))}</p>
+      <p><b>Détenteur</b><br>${esc(t.holder_name)}</p><p><b>Catégorie</b><br>${esc((lot.ticket_categories || {}).name || "")} · ${esc(lot.name || "")}</p>
+      <p class="status">${esc(STATUS[t.status] ? STATUS[t.status][0] : t.status)}</p><div class="qr">${canvas ? `<img src="${canvas.toDataURL("image/png")}" alt="QR code">` : ""}</div>
+      <p class="muted">Code billet : ${esc(t.code)}</p></section><button onclick="window.print()">Imprimer / enregistrer en PDF</button></body></html>`);
+    popup.document.close();
+  }
 
   async function loadPending() {
     try {
@@ -72,6 +91,7 @@
       </div>
       <div class="stub-foot">
         <div class="qr" data-code="${esc(t.code)}" role="img" aria-label="QR code du billet de ${esc(t.holder_name)}"></div>
+        <button class="btn btn-ghost btn-sm" data-pdf="${esc(t.id)}">Télécharger / PDF</button>
         ${canTransfer ? `<button class="btn btn-ghost btn-sm" data-transfer="${esc(t.id)}" data-name="${esc(t.holder_name)}">Transférer ce billet</button>` :
           `<span class="muted small">${t.status === "utilise" ? "Déjà utilisé à l'entrée" : ""}</span>`}
       </div></article>`;
@@ -93,6 +113,7 @@
       return;
     }
     const active = tickets.filter((t) => ["valide", "en_attente_confirmation"].includes(t.status));
+    ticketById = Object.fromEntries(tickets.map((t) => [t.id, t]));
     const other = tickets.filter((t) => !active.includes(t));
     list.innerHTML = (active.length ? `<h2>À présenter à l'entrée</h2>
         <p class="muted">Gardez votre pièce d'identité : le personnel compare votre nom avec celui du billet.</p>
@@ -118,6 +139,8 @@
   }
 
   list.addEventListener("click", async (e) => {
+    const pdf = e.target.closest("[data-pdf]");
+    if (pdf) { printTicket(ticketById[pdf.dataset.pdf]); return; }
     const b = e.target.closest("[data-transfer]");
     if (!b) return;
     const name = prompt("Nom complet de la personne qui reçoit le billet :");

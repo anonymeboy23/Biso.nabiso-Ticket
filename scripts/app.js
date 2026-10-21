@@ -9,6 +9,18 @@
   const App = { sb, cfg, configured, libOk, _me: undefined };
   window.App = App;
 
+  // Rend le site installable sur téléphone (PWA). Les données Supabase restent
+  // toujours synchronisées dès que la connexion revient.
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+  }
+  if (!document.querySelector('link[rel="manifest"]')) {
+    const manifest = document.createElement("link");
+    manifest.rel = "manifest";
+    manifest.href = "/manifest.webmanifest";
+    document.head.appendChild(manifest);
+  }
+
   /* ---------- Petits outils ---------- */
   App.esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));

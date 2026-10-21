@@ -1,0 +1,11 @@
+{
+  "name": "Biso.nabiso-Ticket",
+  "short_name": "Biso Ticket",
+  "description": "Billetterie et contrôle d'accès Biso.nabiso-Ticket",
+  "start_url": "/pages/index.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0f26",
+  "theme_color": "#0a0f26",
+  "lang": "fr"
+}
