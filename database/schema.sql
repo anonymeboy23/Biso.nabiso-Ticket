@@ -1036,7 +1036,16 @@ drop function if exists public.approve_code_payment(uuid);
 create function public.approve_code_payment(p_payment_id uuid) returns void language plpgsql security definer set search_path = '' as $$
 declare v public.payments%rowtype;
 begin
-  if not exists(select 1 from public.profiles where id=auth.uid() and role='proprietaire') then raise exception 'Accès réservé au propriétaire'; end if;
+  if not (
+    exists(select 1 from public.profiles where id=auth.uid() and role='proprietaire')
+    or exists (
+      select 1 from public.orders o join public.events e on e.id=o.event_id
+      join public.profiles p on p.id=auth.uid()
+      where o.id=(select order_id from public.payments where id=p_payment_id)
+        and e.created_by=auth.uid() and p.role='organisateur'
+        and (p.role_expires_at is null or p.role_expires_at > now())
+    )
+  ) then raise exception 'Accès réservé au propriétaire ou au partenaire de cette activité'; end if;
   select * into v from public.payments where id=p_payment_id for update;
   if not found or v.status <> 'a_verifier' then raise exception 'Ce paiement n’est plus à vérifier'; end if;
   update public.incoming_transactions set used=true,used_at=now() where network=v.network and transfer_code=v.transfer_code and amount=v.amount and currency=v.currency and not used;
@@ -1472,4 +1481,50 @@ create policy "Ticket buyers can remove their own photos"
 -- set role = 'personnel'
 -- from auth.users u
 -- where p.id = u.id and lower(u.email) = lower('personnel@example.com');
+
+-- Les partenaires peuvent vérifier uniquement les paiements de leurs activités.
+drop function if exists public.reject_code_payment(uuid);
+create function public.reject_code_payment(p_payment_id uuid) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not (
+    exists(select 1 from public.profiles where id=auth.uid() and role='proprietaire')
+    or exists (
+      select 1 from public.orders o join public.events e on e.id=o.event_id
+      join public.profiles p on p.id=auth.uid()
+      where o.id=(select order_id from public.payments where id=p_payment_id)
+        and e.created_by=auth.uid() and p.role='organisateur'
+        and (p.role_expires_at is null or p.role_expires_at > now())
+    )
+  ) then raise exception 'Accès réservé au propriétaire ou au partenaire de cette activité'; end if;
+  update public.payments set status='echoue', updated_at=now()
+  where id=p_payment_id and status='a_verifier';
+  if not found then raise exception 'Ce paiement n’est plus à vérifier'; end if;
+end; $$;
+
+drop function if exists public.partner_pending_payments();
+create function public.partner_pending_payments() returns jsonb
+language plpgsql security definer set search_path = '' as $$
+declare v_role text; v_rows jsonb;
+begin
+  select role into v_role from public.profiles where id=auth.uid();
+  if v_role not in ('proprietaire','organisateur') then raise exception 'Accès réservé aux administrateurs et partenaires'; end if;
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'payment_id', p.id, 'order_id', o.id, 'event_title', e.title, 'event_id', e.id,
+    'buyer_name', buyer.full_name, 'buyer_phone', buyer.phone,
+    'amount', p.amount, 'currency', p.currency, 'network', p.network,
+    'transfer_code', p.transfer_code, 'payment_phone', p.phone, 'created_at', p.created_at,
+    'ticket_count', (select count(*) from public.order_lines ol where ol.order_id=o.id),
+    'holders', (select coalesce(jsonb_agg(jsonb_build_object(
+      'name', ol.holder_name, 'phone', ol.holder_phone, 'email', ol.holder_email
+    ) order by ol.created_at), '[]'::jsonb) from public.order_lines ol where ol.order_id=o.id)
+  ) order by p.created_at), '[]'::jsonb) into v_rows
+  from public.payments p join public.orders o on o.id=p.order_id
+  join public.events e on e.id=o.event_id left join public.profiles buyer on buyer.id=o.user_id
+  where p.status='a_verifier' and o.status='en_attente' and o.expires_at > now()
+    and (v_role='proprietaire' or e.created_by=auth.uid());
+  return v_rows;
+end; $$;
+revoke all on function public.reject_code_payment(uuid), public.partner_pending_payments() from public, anon;
+grant execute on function public.reject_code_payment(uuid), public.partner_pending_payments() to authenticated;
 

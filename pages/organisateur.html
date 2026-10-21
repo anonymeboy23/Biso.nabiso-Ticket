@@ -18,9 +18,11 @@
     <div id="access"></div>
     <div class="tabs" role="tablist" id="tabs">
       <button type="button" role="tab" data-tab="events" aria-selected="true">Mes événements</button>
+      <button type="button" role="tab" data-tab="payments" aria-selected="false">Paiements à vérifier</button>
       <button type="button" role="tab" data-tab="incidents" aria-selected="false">Cas signalés</button>
     </div>
     <div id="p-events"><div id="em"></div></div>
+    <div id="p-payments" class="hidden"><div id="payments"></div></div>
     <div id="p-incidents" class="hidden">
       <p class="muted">Une personne se présente avec le billet d'un autre. Contactez le détenteur pour confirmer, puis décidez.</p>
       <div id="inc"></div>
@@ -52,6 +54,23 @@
     const className = days <= 3 ? "warn" : "ok";
     App.$("#access").innerHTML = `<div class="alert ${className}">Votre accès organisateur se termine le ${esc(App.fmtShort(expiry))} (${days} jour${days === 1 ? "" : "s"} restant${days === 1 ? "" : "s"}).</div>`;
   }
+  async function loadPayments() {
+    const box = App.$("#payments");
+    try {
+      const rows = await App.rpc("partner_pending_payments");
+      box.innerHTML = `<div class="alert warn"><b>Important :</b> vérifiez le code reçu dans votre relevé Mobile Money, le montant et le nom du client avant d'accepter. Après confirmation, les billets deviennent visibles dans « Mes billets ».</div>` +
+        (rows.length ? rows.map((p) => `<article class="panel">
+          <div class="inline" style="justify-content:space-between"><h3 style="margin:0">${esc(p.event_title)}</h3><span class="chip warn">À vérifier</span></div>
+          <p><b>Client :</b> ${esc(p.buyer_name || "Non renseigné")} · ${esc(p.buyer_phone || "Téléphone non renseigné")}<br>
+            <b>Billets :</b> ${esc(p.ticket_count)} · <b>Montant :</b> ${esc(p.amount)} ${esc(p.currency)}<br>
+            <b>Preuve :</b> ${esc(p.network || "")} · <b>${esc(p.transfer_code || "")}</b> · ${esc(p.payment_phone || "Numéro non renseigné")}<br>
+            <span class="muted small">${esc(App.fmtShort(p.created_at))}</span></p>
+          <details><summary>Détenteurs des billets</summary><ul>${(p.holders || []).map((h) => `<li>${esc(h.name)} · ${esc(h.phone || "sans téléphone")} · ${esc(h.email || "sans e-mail")}</li>`).join("")}</ul></details>
+          <div class="inline" style="margin-top:12px"><button class="btn btn-ok btn-sm" data-pay-act="approve" data-id="${esc(p.payment_id)}">Paiement reçu : accepter</button>
+          <button class="btn btn-danger btn-sm" data-pay-act="reject" data-id="${esc(p.payment_id)}">Refuser</button></div>
+        </article>`).join("") : '<div class="empty">Aucun paiement à vérifier pour vos activités.</div>');
+    } catch (e) { App.error(e); box.innerHTML = `<div class="alert bad">${esc(App.friendly(e))}</div>`; }
+  }
   await EventsManager.mount(App.$("#em"), { me, owner: false, orgs: [], operations: false, staff: true });
 
   App.$("#tabs").onclick = async (e) => {
@@ -60,9 +79,21 @@
     const t = b.dataset.tab;
     App.$$("#tabs button").forEach((x) => x.setAttribute("aria-selected", x === b));
     App.$("#p-events").classList.toggle("hidden", t !== "events");
+    App.$("#p-payments").classList.toggle("hidden", t !== "payments");
     App.$("#p-incidents").classList.toggle("hidden", t !== "incidents");
+    if (t === "payments") await loadPayments();
     if (t === "incidents") App.$("#inc").innerHTML = '<div class="empty">Le suivi des incidents sera disponible quand le module de contrôle sera relié à la base de données.</div>';
   };
+  App.$("#payments").addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-pay-act]");
+    if (!b) return;
+    if (!confirm(b.dataset.payAct === "approve" ? "Confirmer que le paiement est bien reçu ? Les billets seront activés." : "Refuser cette preuve de paiement ?")) return;
+    await App.run(b, async () => {
+      await App.rpc(b.dataset.payAct === "approve" ? "approve_code_payment" : "reject_code_payment", { p_payment_id: b.dataset.id });
+      App.toast(b.dataset.payAct === "approve" ? "Paiement accepté : billets activés." : "Paiement refusé.", b.dataset.payAct === "approve" ? "ok" : "error");
+      await loadPayments();
+    });
+  });
 })();
 </script>
 </body>

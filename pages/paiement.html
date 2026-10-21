@@ -190,6 +190,7 @@
   /* ---------- Page ---------- */
   root.innerHTML = `
     <h1 style="font-size:1.9rem">Paiement</h1>
+    <div class="alert warn"><b>Comment ça marche :</b> vos billets restent réservés et en attente pendant la vérification. Si vous avez déjà payé, saisissez le code reçu par SMS dans « J'ai déjà payé par transfert ». L'organisateur ou l'administration vérifiera le montant et activera ensuite tous les billets de cette commande.</div>
     <div class="panel">
       <h3>${esc(order.events ? order.events.title : "Votre commande")}</h3>
       ${order.events ? `<p class="muted small">${esc(App.fmtDate(order.events.starts_at))}</p>` : ""}
