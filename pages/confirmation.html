@@ -11,9 +11,9 @@
 <main id="main">
   <div class="wrap page" style="max-width:620px">
     <div class="panel center">
-      <h1>Compte confirmé</h1>
-      <p>Votre adresse e-mail a été confirmée avec succès.</p>
-      <p class="muted">Vous pouvez maintenant vous connecter avec votre adresse e-mail et votre mot de passe.</p>
+      <h1 id="title">Compte confirmé</h1>
+      <p id="message">Votre adresse e-mail a été confirmée avec succès.</p>
+      <p id="detail" class="muted">Connexion automatique en cours…</p>
       <div class="inline" style="justify-content:center;margin-top:20px">
         <a class="btn" id="login" href="connexion.html">Se connecter</a>
         <a class="btn btn-ghost" href="index.html">Voir les événements</a>
@@ -21,12 +21,31 @@
     </div>
   </div>
 </main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="../scripts/config.js"></script>
 <script src="../scripts/app.js"></script>
 <script>
-  App.renderNav("login", null);
-  const next = new URLSearchParams(location.search).get("next");
-  if (next) document.querySelector("#login").href = "connexion.html?next=" + encodeURIComponent(next);
+  (async () => {
+    App.renderNav("login", null);
+    const next = new URLSearchParams(location.search).get("next");
+    if (next) document.querySelector("#login").href = "connexion.html?next=" + encodeURIComponent(next);
+    if (!App.sb) return;
+    const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
+    if (hash.get("error_code")) {
+      document.querySelector("#title").textContent = "Confirmation impossible";
+      document.querySelector("#message").textContent = hash.get("error_description") || "Le lien est expiré ou invalide.";
+      document.querySelector("#detail").textContent = "Demandez un nouvel e-mail de confirmation depuis la page de connexion.";
+      return;
+    }
+    const { data } = await App.sb.auth.getSession();
+    if (!data.session) {
+      document.querySelector("#detail").textContent = "Vous pouvez maintenant vous connecter avec votre e-mail et votre mot de passe.";
+      return;
+    }
+    App.renderNav("home", await App.me(true));
+    document.querySelector("#detail").textContent = "Vous êtes connecté. Redirection vers l’accueil…";
+    setTimeout(() => App.go("index.html"), 1200);
+  })();
 </script>
 </body>
 </html>
