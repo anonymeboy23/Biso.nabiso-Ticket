@@ -97,7 +97,8 @@ begin
       raise exception 'The owner role cannot be changed';
     end if;
 
-    if auth.uid() is not null then
+    if auth.uid() is not null
+       and coalesce(current_setting('app.allow_role_management', true), '') <> 'on' then
       raise exception 'Profile roles cannot be changed by an authenticated user';
     end if;
 
@@ -116,6 +117,48 @@ begin
   return new;
 end;
 $$;
+
+-- Le propriétaire peut autoriser un compte existant à scanner les billets.
+-- La fonction est appelée depuis l'administration et protège elle-même l'accès.
+drop function if exists public.set_staff_role(text, text);
+create function public.set_staff_role(p_email text, p_role text default 'personnel')
+returns table (id uuid, full_name text, email text, role text)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = auth.uid() and role = 'proprietaire'
+  ) then
+    raise exception 'Accès réservé au propriétaire';
+  end if;
+
+  if lower(coalesce(p_role, '')) not in ('personnel', 'client') then
+    raise exception 'Rôle invalide';
+  end if;
+
+  perform set_config('app.allow_role_management', 'on', true);
+  update public.profiles p
+  set role = lower(p_role)
+  from auth.users u
+  where p.id = u.id
+    and lower(u.email) = lower(trim(coalesce(p_email, '')));
+
+  if not found then
+    raise exception 'Aucun compte trouvé pour cet email';
+  end if;
+
+  return query
+    select p.id, p.full_name, u.email, p.role
+    from public.profiles p
+    join auth.users u on u.id = p.id
+    where lower(u.email) = lower(trim(coalesce(p_email, '')));
+end;
+$$;
+revoke all on function public.set_staff_role(text, text) from public;
+grant execute on function public.set_staff_role(text, text) to authenticated;
 
 drop trigger if exists guard_profile_role on public.profiles;
 create trigger guard_profile_role

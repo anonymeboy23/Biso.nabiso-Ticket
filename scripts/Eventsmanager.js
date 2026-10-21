@@ -167,6 +167,14 @@
 
     function render() {
       root.innerHTML = `
+        ${ctx.owner ? `<form class="panel" data-form="promote-staff">
+          <h3>Ajouter un scanneur</h3>
+          <p class="muted small">L'utilisateur doit avoir créé et confirmé son compte. Il pourra ensuite être affecté à une activité ci-dessous.</p>
+          <div class="inline">
+            <input name="email" type="email" required placeholder="E-mail de l'utilisateur" style="flex:2;min-width:240px">
+            <button class="btn btn-sm" type="submit">Autoriser comme scanneur</button>
+          </div>
+        </form>` : ""}
         <details class="panel"><summary>＋ Créer un événement</summary>
           <form data-form="new-event">${eventFields(null, ctx)}
           <button class="btn" type="submit">Créer l'événement (brouillon)</button></form></details>
@@ -276,6 +284,11 @@
           open.add(created.id);
           App.toast("Événement créé. Ajoutez maintenant les catégories et les lots de billets.", "ok");
           await refresh();
+        }
+        else if (kind === "promote-staff") {
+          await App.rpc("set_staff_role", { p_email: f.get("email").trim(), p_role: "personnel" });
+          App.toast("Utilisateur autorisé comme scanneur.", "ok");
+          form.reset();
         }
         else if (kind === "edit-event") {
           await App.q(sb.from("events").update(readEvent(form)).eq("id", id));
