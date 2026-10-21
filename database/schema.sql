@@ -144,6 +144,7 @@ begin
   end if;
 
   perform set_config('app.allow_role_management', 'on', true);
+  perform set_config('biso.allow_role_change', 'on', true);
   update public.profiles p
   set role = lower(p_role)
   from auth.users u
@@ -289,6 +290,7 @@ create table if not exists public.events (
   title text not null check (length(trim(title)) between 1 and 120),
   description text,
   starts_at timestamptz not null,
+  ends_at timestamptz,
   capacity integer not null check (capacity > 0),
   currency text not null default 'USD' check (currency in ('USD', 'CDF')),
   venue text,
@@ -304,6 +306,14 @@ create table if not exists public.events (
 
 alter table public.events
   add column if not exists require_ticket_photo boolean not null default false;
+alter table public.events
+  add column if not exists ends_at timestamptz;
+alter table public.order_lines
+  add column if not exists holder_email text;
+alter table public.tickets
+  add column if not exists holder_email text;
+alter table public.staff_assignments
+  add column if not exists active_until timestamptz;
 alter table public.events
   add column if not exists created_by uuid references public.profiles (id) on delete restrict;
 alter table public.events
@@ -564,6 +574,7 @@ create table if not exists public.order_lines (
   lot_id uuid not null references public.ticket_lots (id) on delete restrict,
   holder_name text not null check (length(trim(holder_name)) between 1 and 80),
   holder_phone text,
+  holder_email text,
   photo_path text,
   unit_price numeric(12, 2) not null check (unit_price >= 0),
   created_at timestamptz not null default now()
@@ -579,6 +590,7 @@ create table if not exists public.tickets (
   owner_id uuid not null references public.profiles (id) on delete restrict,
   holder_name text not null,
   holder_phone text,
+  holder_email text,
   photo_path text,
   status text not null default 'en_attente_paiement'
     check (status in ('valide', 'en_attente_paiement', 'en_attente_confirmation', 'utilise', 'annule', 'bloque')),
@@ -594,6 +606,7 @@ create table if not exists public.staff_assignments (
   event_id uuid not null references public.events (id) on delete cascade,
   user_id uuid not null references public.profiles (id) on delete cascade,
   gate text not null default 'Porte 1',
+  active_until timestamptz,
   created_at timestamptz not null default now(),
   unique (event_id, user_id)
 );
@@ -741,8 +754,9 @@ begin
   if v_staff_id is null then
     raise exception 'Aucun compte personnel trouvé pour cet email';
   end if;
-  insert into public.staff_assignments (event_id, user_id, gate)
-  values (p_event_id, v_staff_id, left(coalesce(nullif(trim(p_gate), ''), 'Porte 1'), 30))
+  insert into public.staff_assignments (event_id, user_id, gate, active_until)
+  values (p_event_id, v_staff_id, left(coalesce(nullif(trim(p_gate), ''), 'Porte 1'), 30),
+          (select ends_at from public.events where id = p_event_id))
   on conflict (event_id, user_id) do update
     set gate = excluded.gate
   returning id into v_assignment_id;
@@ -752,7 +766,7 @@ $$;
 
 drop function if exists public.list_staff(uuid);
 create function public.list_staff(p_event_id uuid)
-returns table (id uuid, full_name text, email text, gate text)
+returns table (id uuid, full_name text, email text, phone text, gate text, active_until timestamptz)
 language plpgsql
 security definer
 set search_path = ''
@@ -767,7 +781,7 @@ begin
     )
   ) then raise exception 'Vous ne pouvez pas consulter le personnel de cet événement'; end if;
   return query
-    select s.id, p.full_name, u.email, s.gate
+    select s.id, p.full_name, u.email, p.phone, s.gate, s.active_until
     from public.staff_assignments s
     join public.profiles p on p.id = s.user_id
     join auth.users u on u.id = s.user_id
@@ -799,6 +813,30 @@ begin
   delete from public.staff_assignments where id = p_assignment_id;
 end;
 $$;
+
+drop function if exists public.remove_staff_role(text);
+create function public.remove_staff_role(p_email text)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare v_user_id uuid;
+begin
+  if not exists (select 1 from public.profiles where id = auth.uid() and role = 'proprietaire') then
+    raise exception 'Accès réservé aux administrateurs';
+  end if;
+  select u.id into v_user_id from auth.users u
+  where lower(u.email) = lower(trim(coalesce(p_email, '')));
+  if v_user_id is null then raise exception 'Aucun compte trouvé pour cet email'; end if;
+  delete from public.staff_assignments where user_id = v_user_id;
+  perform set_config('app.allow_role_management', 'on', true);
+  perform set_config('biso.allow_role_change', 'on', true);
+  update public.profiles set role = 'client' where id = v_user_id and role = 'personnel';
+end;
+$$;
+revoke all on function public.remove_staff_role(text) from public, anon;
+grant execute on function public.remove_staff_role(text) to authenticated;
 
 create or replace function public.expire_pending_orders()
 returns void
@@ -846,6 +884,7 @@ declare
   v_photo text;
   v_name text;
   v_phone text;
+  v_email text;
   v_total numeric(12, 2) := 0;
 begin
   if v_user is null then raise exception 'Connexion requise'; end if;
@@ -868,6 +907,10 @@ begin
   loop
     v_name := trim(coalesce(v_line ->> 'holder_name', ''));
     v_phone := nullif(trim(coalesce(v_line ->> 'holder_phone', '')), '');
+    v_email := nullif(lower(trim(coalesce(v_line ->> 'holder_email', ''))), '');
+    if v_email is null or length(v_email) > 254 or v_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' then
+      raise exception 'E-mail du détenteur invalide';
+    end if;
     v_photo := nullif(trim(coalesce(v_line ->> 'photo_path', '')), '');
     if length(v_name) < 1 or length(v_name) > 80 then
       raise exception 'Le nom du détenteur est invalide';
@@ -906,17 +949,18 @@ begin
     where id = (v_line ->> 'lot_id')::uuid and event_id = p_event_id;
     v_name := trim(v_line ->> 'holder_name');
     v_phone := nullif(trim(coalesce(v_line ->> 'holder_phone', '')), '');
+    v_email := nullif(lower(trim(coalesce(v_line ->> 'holder_email', ''))), '');
     v_photo := nullif(trim(coalesce(v_line ->> 'photo_path', '')), '');
-    insert into public.order_lines (order_id, lot_id, holder_name, holder_phone, photo_path, unit_price)
-    values (v_order_id, v_lot.id, v_name, v_phone, v_photo, v_lot.price)
+    insert into public.order_lines (order_id, lot_id, holder_name, holder_phone, holder_email, photo_path, unit_price)
+    values (v_order_id, v_lot.id, v_name, v_phone, v_email, v_photo, v_lot.price)
     returning id into v_line_id;
     insert into public.tickets (
       code, order_line_id, order_id, event_id, lot_id, owner_id,
-      holder_name, holder_phone, photo_path, is_free
+      holder_name, holder_phone, holder_email, photo_path, is_free
     ) values (
       replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', ''),
       v_line_id, v_order_id, p_event_id, v_lot.id, v_user,
-      v_name, v_phone, v_photo, v_lot.price = 0
+      v_name, v_phone, v_email, v_photo, v_lot.price = 0
     );
   end loop;
 
@@ -1059,6 +1103,7 @@ declare
   v_role text;
   v_result text;
   v_event_status text;
+  v_event public.events%rowtype;
   v_lot text;
   v_category text;
 begin
@@ -1066,7 +1111,8 @@ begin
   if v_role is null or not (
     v_role = 'proprietaire'
     or (v_role = 'personnel' and exists (select 1 from public.staff_assignments
-               where event_id = p_event_id and user_id = auth.uid())
+               where event_id = p_event_id and user_id = auth.uid()
+                 and (active_until is null or active_until > now()))
     )
   ) then raise exception 'Vous n’êtes pas affecté à cet événement'; end if;
 
@@ -1078,7 +1124,11 @@ begin
   if v_ticket.event_id <> p_event_id then
     return jsonb_build_object('result', 'autre_evenement', 'other_event', 'un autre événement');
   end if;
-  select status into v_event_status from public.events where id = p_event_id;
+  select * into v_event from public.events where id = p_event_id;
+  v_event_status := v_event.status;
+  if v_event.ends_at is not null and now() > v_event.ends_at then
+    raise exception 'Cette activité est terminée';
+  end if;
   v_result := case v_ticket.status
     when 'valide' then 'valide'
     when 'utilise' then 'deja_utilise'
@@ -1092,9 +1142,19 @@ begin
   where l.id = v_ticket.lot_id;
   return jsonb_build_object(
     'result', v_result, 'ticket_id', v_ticket.id, 'holder_name', v_ticket.holder_name,
-    'photo_path', v_ticket.photo_path, 'used_at', v_ticket.scanned_at,
-    'photo_required', (select require_ticket_photo from public.events where id = p_event_id),
-    'lot', v_lot, 'category', v_category
+    'photo_path', v_ticket.photo_path, 'holder_phone', v_ticket.holder_phone,
+    'holder_email', v_ticket.holder_email, 'event_title', v_event.title,
+    'used_at', v_ticket.scanned_at,
+    'photo_required', v_event.require_ticket_photo,
+    'lot', v_lot, 'category', v_category,
+    'staff', coalesce((select jsonb_agg(jsonb_build_object(
+      'name', p.full_name, 'email', u.email, 'phone', p.phone, 'gate', s.gate
+    ) order by p.full_name)
+    from public.staff_assignments s
+    join public.profiles p on p.id = s.user_id
+    join auth.users u on u.id = s.user_id
+    where s.event_id = p_event_id
+      and (s.active_until is null or s.active_until > now())), '[]'::jsonb)
   );
 end;
 $$;
@@ -1115,7 +1175,8 @@ begin
     exists (select 1 from public.profiles where id = auth.uid() and role = 'proprietaire')
     or (exists (select 1 from public.profiles where id = auth.uid() and role = 'personnel')
       and exists (select 1 from public.staff_assignments
-               where event_id = v_ticket.event_id and user_id = auth.uid())
+               where event_id = v_ticket.event_id and user_id = auth.uid()
+                 and (active_until is null or active_until > now()))
     )
   ) then raise exception 'Vous n’êtes pas affecté à cet événement'; end if;
   if v_ticket.status <> 'valide' then
@@ -1123,6 +1184,9 @@ begin
   end if;
   if exists (select 1 from public.events where id = v_ticket.event_id and status = 'annule') then
     return jsonb_build_object('ok', false, 'message', 'Cet événement a été annulé');
+  end if;
+  if exists (select 1 from public.events where id = v_ticket.event_id and ends_at is not null and now() > ends_at) then
+    return jsonb_build_object('ok', false, 'message', 'Cette activité est terminée');
   end if;
   update public.tickets
   set status = 'utilise', scanned_at = now(), scanned_by = auth.uid(),
@@ -1144,7 +1208,8 @@ begin
     exists (select 1 from public.profiles where id = auth.uid() and role = 'proprietaire')
     or (exists (select 1 from public.profiles where id = auth.uid() and role = 'personnel')
       and exists (select 1 from public.staff_assignments
-               where event_id = p_event_id and user_id = auth.uid())
+               where event_id = p_event_id and user_id = auth.uid()
+                 and (active_until is null or active_until > now()))
     )
   ) then raise exception 'Vous n’êtes pas affecté à cet événement'; end if;
   return jsonb_build_object(
@@ -1165,7 +1230,8 @@ begin
     exists (select 1 from public.profiles where id = auth.uid() and role = 'proprietaire')
     or (exists (select 1 from public.profiles where id = auth.uid() and role = 'personnel')
       and exists (select 1 from public.staff_assignments
-               where event_id = p_event_id and user_id = auth.uid())
+               where event_id = p_event_id and user_id = auth.uid()
+                 and (active_until is null or active_until > now()))
     )
   ) then raise exception 'Vous n’êtes pas affecté à cet événement'; end if;
   if length(trim(coalesce(p_query, ''))) < 3 then return; end if;
@@ -1200,7 +1266,8 @@ begin
     exists (select 1 from public.profiles where id = auth.uid() and role = 'proprietaire')
     or (exists (select 1 from public.profiles where id = auth.uid() and role = 'personnel')
       and exists (select 1 from public.staff_assignments
-                  where event_id = v_ticket.event_id and user_id = auth.uid()))
+                  where event_id = v_ticket.event_id and user_id = auth.uid()
+                    and (active_until is null or active_until > now())))
   ) then raise exception 'Vous n’êtes pas affecté à cet événement'; end if;
   if length(trim(coalesce(p_present_name, ''))) not between 1 and 80 then
     raise exception 'Le nom de la personne présente est invalide';

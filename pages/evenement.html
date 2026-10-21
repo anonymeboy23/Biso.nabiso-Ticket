@@ -151,6 +151,8 @@
               <input name="name${i}" required maxlength="80" autocomplete="name" value="${i === 0 ? esc(me.full_name || "") : ""}"></label>
             <label class="field"><span>Téléphone (facultatif)</span>
               <input name="phone${i}" type="tel" maxlength="20" value="${i === 0 ? esc(me.phone || "") : ""}"></label>
+            <label class="field"><span>E-mail du détenteur</span>
+              <input name="email${i}" type="email" required maxlength="254" autocomplete="email" value="${i === 0 ? esc(me.email || "") : ""}"></label>
           </div></div>`).join("")}
         <div class="cart-bar"><div><b>${tickets.length} billet${tickets.length > 1 ? "s" : ""}</b><br><span class="price">${money(total(), ev.currency)}</span></div>
           <div class="inline"><button type="button" class="btn btn-ghost" id="back">Retour</button>
@@ -194,6 +196,7 @@
               lot_id: tickets[i].id,
               holder_name: f.get("name" + i).trim(),
               holder_phone: (f.get("phone" + i) || "").trim(),
+              holder_email: (f.get("email" + i) || "").trim(),
               photo_path: photoPath,
             });
           }

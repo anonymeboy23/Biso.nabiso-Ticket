@@ -12,6 +12,8 @@
       <div class="row">
         <label class="field"><span>Date et heure</span>
           <input type="datetime-local" name="starts_at" required value="${ev ? App.toLocalInput(ev.starts_at) : ""}"></label>
+        <label class="field"><span>Fin de l'activité (facultatif)</span>
+          <input type="datetime-local" name="ends_at" value="${ev && ev.ends_at ? App.toLocalInput(ev.ends_at) : ""}"></label>
         <label class="field"><span>Capacité de la salle</span>
           <input type="number" name="capacity" min="1" required value="${ev ? ev.capacity : ""}"></label>
         <label class="field"><span>Devise des prix</span>
@@ -39,6 +41,7 @@
     return {
       title: f.get("title").trim(),
       starts_at: App.fromLocalInput(f.get("starts_at")),
+      ends_at: f.get("ends_at") ? App.fromLocalInput(f.get("ends_at")) : null,
       capacity: parseInt(f.get("capacity"), 10),
       currency: f.get("currency"),
       venue: f.get("venue").trim() || null,
@@ -190,9 +193,10 @@
       if (!box) return;
       try {
         const list = await App.rpc("list_staff", { p_event_id: id });
-        box.innerHTML = list.length ? `<div class="table-wrap"><table><thead><tr><th>Nom</th><th>Email</th><th>Porte</th><th></th></tr></thead><tbody>
-          ${list.map((s) => `<tr><td>${esc(s.full_name)}</td><td>${esc(s.email)}</td><td>${esc(s.gate)}</td>
-          <td><button class="btn btn-ghost btn-sm" data-act="staff-del" data-id="${esc(s.id)}">Retirer</button></td></tr>`).join("")}
+        box.innerHTML = list.length ? `<div class="table-wrap"><table><thead><tr><th>Nom</th><th>Email</th><th>Téléphone</th><th>Porte</th><th></th></tr></thead><tbody>
+          ${list.map((s) => `<tr><td>${esc(s.full_name)}</td><td>${esc(s.email)}</td><td>${esc(s.phone || "Non renseigné")}</td><td>${esc(s.gate)}</td>
+          <td><button class="btn btn-ghost btn-sm" data-act="staff-del" data-id="${esc(s.id)}">Retirer</button>
+          ${ctx.owner ? `<button class="btn btn-ghost btn-sm" data-act="staff-demote" data-email="${esc(s.email)}">Passer en client</button>` : ""}</td></tr>`).join("")}
           </tbody></table></div>` : "Aucun membre du personnel affecté.";
       } catch (e) { box.textContent = App.friendly(e); }
     }
@@ -249,6 +253,12 @@
         }
         else if (act === "staff-del") {
           await App.rpc("remove_staff", { p_assignment_id: id });
+          for (const eid of open) await loadStaff(eid);
+        }
+        else if (act === "staff-demote") {
+          if (!confirm("Retirer le rôle scanneur et toutes ses affectations ?")) return;
+          await App.rpc("remove_staff_role", { p_email: t.dataset.email });
+          App.toast("Le compte est redevenu client et ses affectations ont été supprimées.", "ok");
           for (const eid of open) await loadStaff(eid);
         }
       });

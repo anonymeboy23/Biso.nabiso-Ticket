@@ -62,11 +62,13 @@
   let evs = [];
   try {
     if (me.role === "proprietaire") {
-      const rows = await App.q(sb.from("events").select("id,title,starts_at").in("status", ["publie", "complet"]).order("starts_at"));
-      evs = rows.map((r) => ({ id: r.id, title: r.title, gate: "Porte 1" }));
+      const rows = await App.q(sb.from("events").select("id,title,starts_at,ends_at").in("status", ["publie", "complet"]).order("starts_at"));
+      evs = rows.filter((r) => !r.ends_at || new Date(r.ends_at) > new Date())
+        .map((r) => ({ id: r.id, title: r.title, gate: "Porte 1" }));
     } else {
-      const rows = await App.q(sb.from("staff_assignments").select("gate, events(id,title,starts_at)").eq("user_id", me.id));
-      evs = rows.filter((r) => r.events).map((r) => ({ id: r.events.id, title: r.events.title, gate: r.gate }));
+      const rows = await App.q(sb.from("staff_assignments").select("gate,active_until, events(id,title,starts_at,ends_at)").eq("user_id", me.id));
+      evs = rows.filter((r) => r.events && (!r.active_until || new Date(r.active_until) > new Date()) && (!r.events.ends_at || new Date(r.events.ends_at) > new Date()))
+        .map((r) => ({ id: r.events.id, title: r.events.title, gate: r.gate }));
     }
   } catch (e) { App.error(e); }
   if (!evs.length) {
@@ -108,8 +110,11 @@
     let cls = "bad", title = "", body = "";
     if (r.result === "valide") {
       cls = "ok"; title = "Billet valide";
+      const staff = (r.staff || []).map((s) => `<li>${esc(s.name || "Personnel")} · ${esc(s.email || "")}${s.phone ? " · " + esc(s.phone) : ""}</li>`).join("");
       body = `<div class="who">${esc(r.holder_name)}</div>
         <p class="muted" style="margin:0 0 8px">${esc(r.category || "")}${r.lot ? " · " + esc(r.lot) : ""}</p>
+        <p class="small" style="margin:0 0 8px">Téléphone : <b>${esc(r.holder_phone || "Non renseigné")}</b><br>E-mail : <b>${esc(r.holder_email || "Non renseigné")}</b></p>
+        ${staff ? `<details class="small" style="margin-bottom:10px"><summary>Personnel autorisé pour cette activité</summary><ul>${staff}</ul></details>` : ""}
         <div id="scan-photo" class="scan-photo" aria-live="polite"></div>
         <p class="small">Comparez ce nom avec la personne (pièce d'identité si besoin).</p>
         <div class="inline" style="justify-content:center">

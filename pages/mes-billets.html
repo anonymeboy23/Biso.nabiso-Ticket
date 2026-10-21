@@ -51,6 +51,7 @@
       <style>body{font-family:Arial,sans-serif;max-width:650px;margin:30px auto;color:#111827}header{border-bottom:3px solid #ffc83d;padding-bottom:15px}h1{margin:0 0 6px}h2{margin-top:28px}.ticket{border:1px solid #d1d5db;border-radius:16px;padding:24px;margin-top:24px}.qr{text-align:center;margin:24px}.qr img{width:240px;height:240px}.muted{color:#6b7280}.status{font-weight:bold;color:#087f5b}@media print{button{display:none}}</style></head><body>
       <header><h1>Biso.nabiso-Ticket</h1><div class="muted">Billet électronique</div></header><section class="ticket"><h2>${esc(ev.title || "Événement")}</h2>
       <p class="muted">${esc(App.fmtDate(ev.starts_at))}<br>${esc([ev.venue, ev.city].filter(Boolean).join(", "))}</p>
+      <p><b>Contacts du détenteur</b><br>${esc(t.holder_phone || "Téléphone non renseigné")}<br>${esc(t.holder_email || "E-mail non renseigné")}</p>
       <p><b>Détenteur</b><br>${esc(t.holder_name)}</p><p><b>Catégorie</b><br>${esc((lot.ticket_categories || {}).name || "")} · ${esc(lot.name || "")}</p>
       <p class="status">${esc(STATUS[t.status] ? STATUS[t.status][0] : t.status)}</p><div class="qr">${canvas ? `<img src="${canvas.toDataURL("image/png")}" alt="QR code">` : ""}</div>
       <p class="muted">Code billet : ${esc(t.code)}</p></section><button onclick="window.print()">Imprimer / enregistrer en PDF</button></body></html>`);
@@ -86,6 +87,7 @@
         ${evCancelled ? '<p class="alert bad small">Cet événement a été annulé.</p>' : ""}
         <p style="margin:0"><span class="muted small">Détenteur du billet</span><br>
           <b style="font-family:var(--font-display);font-size:1.35rem">${esc(t.holder_name)}</b></p>
+        <p class="small muted" style="margin:6px 0 0">${esc(t.holder_phone || "Téléphone non renseigné")} · ${esc(t.holder_email || "E-mail non renseigné")}</p>
         ${t.photo_path ? `<img class="ticket-photo" data-photo-path="${esc(t.photo_path)}" alt="Photo du détenteur ${esc(t.holder_name)}" hidden>` : ""}
         ${t.is_free ? '<p class="small" style="margin:6px 0 0"><span class="chip">Invitation</span></p>' : ""}
       </div>
@@ -101,7 +103,7 @@
     let tickets = [];
     try {
       tickets = await App.q(sb.from("tickets")
-        .select("id,code,holder_name,status,is_free,photo_path,events(title,starts_at,venue,city,status),ticket_lots(name,ticket_categories(name))")
+        .select("id,code,holder_name,holder_phone,holder_email,status,is_free,photo_path,events(title,starts_at,venue,city,status),ticket_lots(name,ticket_categories(name))")
         .eq("owner_id", me.id).order("created_at", { ascending: false }));
     } catch (e) {
       App.error(e);
